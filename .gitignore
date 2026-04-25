@@ -1,0 +1,9 @@
+# keep-sorted start
+.direnv/
+.gradle/
+.idea/
+app/build/
+build/
+local.properties
+result
+# keep-sorted end
