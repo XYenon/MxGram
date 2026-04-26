@@ -1,6 +1,7 @@
 package dev.xyenon.mxgram;
 
 import android.content.Context;
+import android.view.View;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
@@ -17,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class TelegramHooksModule extends XposedModule {
   private static final String TAG = "MxGram";
   private static final String TARGET_PACKAGE = "org.telegram.messenger";
+  private static final int OPTION_PLUS_ONE = 0x4D584701; // "MXG\u0001"
   private static volatile TelegramHooksModule instance;
 
   private final AtomicBoolean hooksInstalled = new AtomicBoolean(false);
@@ -63,6 +65,27 @@ public final class TelegramHooksModule extends XposedModule {
     hookGreetingStickerSend(chatGreetingsViewClass);
     hookSelectReaction(chatActivityClass);
     hookPullingDownTargets(pullingDownDrawableClass);
+    hookPlusOneForward(chatActivityClass);
+  }
+
+  private void hookPlusOneForward(Class<?> chatActivityClass) throws NoSuchMethodException {
+    Method fillMessageMenu = null;
+    for (Method method : chatActivityClass.getDeclaredMethods()) {
+      if ("fillMessageMenu".equals(method.getName()) && method.getParameterCount() == 4) {
+        fillMessageMenu = method;
+        break;
+      }
+    }
+    if (fillMessageMenu == null) {
+      throw new IllegalStateException("ChatActivity.fillMessageMenu(...) not found");
+    }
+    fillMessageMenu.setAccessible(true);
+    hook(fillMessageMenu, FillMessageMenuHooker.class);
+
+    Method processSelectedOption =
+        chatActivityClass.getDeclaredMethod("processSelectedOption", int.class);
+    processSelectedOption.setAccessible(true);
+    hook(processSelectedOption, ProcessSelectedOptionHooker.class);
   }
 
   private void hookAnimateToNextChat(Class<?> chatActivityClass) throws NoSuchMethodException {
@@ -175,6 +198,249 @@ public final class TelegramHooksModule extends XposedModule {
     findField(chatGreetingsView.getClass(), "listener").set(chatGreetingsView, null);
   }
 
+  private static int getStaticIntFieldValue(Class<?> type, String name, int fallback) {
+    try {
+      Field field = type.getDeclaredField(name);
+      field.setAccessible(true);
+      return field.getInt(null);
+    } catch (Throwable t) {
+      return fallback;
+    }
+  }
+
+  private static int resolveTelegramDrawable(
+      ClassLoader classLoader, String drawableName, int fallback) {
+    if (classLoader == null) {
+      return fallback;
+    }
+    try {
+      Class<?> drawableClass =
+          Class.forName("org.telegram.messenger.R$drawable", false, classLoader);
+      Field field = drawableClass.getDeclaredField(drawableName);
+      field.setAccessible(true);
+      return field.getInt(null);
+    } catch (Throwable t) {
+      return fallback;
+    }
+  }
+
+  private boolean canSendToCurrentConversation(Object chatActivity) {
+    try {
+      // If Telegram is showing the bottom overlay instead of the input field, we definitely can't
+      // send right now.
+      Object bottomChannelButtonsLayout =
+          findField(chatActivity.getClass(), "bottomChannelButtonsLayout").get(chatActivity);
+      if (bottomChannelButtonsLayout instanceof View) {
+        // Telegram uses this overlay when the input field is not available.
+        // NOTE: the normal state is usually INVISIBLE, not GONE.
+        if (((View) bottomChannelButtonsLayout).getVisibility() == View.VISIBLE) {
+          return false;
+        }
+      }
+
+      // For user dialogs, blocked state is the most common reason why sending is disabled.
+      try {
+        if (findField(chatActivity.getClass(), "userBlocked").getBoolean(chatActivity)) {
+          return false;
+        }
+      } catch (NoSuchFieldException ignored) {
+        // Ignore.
+      }
+
+      Object currentChat = null;
+      try {
+        currentChat = findField(chatActivity.getClass(), "currentChat").get(chatActivity);
+      } catch (NoSuchFieldException ignored) {
+        // Ignore.
+      }
+      if (currentChat == null) {
+        // Private chat / other modes: rely on the overlay checks above.
+        return true;
+      }
+
+      ClassLoader classLoader = chatActivity.getClass().getClassLoader();
+      if (classLoader == null) {
+        return true;
+      }
+      Class<?> chatObjectClass =
+          Class.forName("org.telegram.messenger.ChatObject", false, classLoader);
+
+      // Not a member / left / kicked.
+      if (invokeStaticBoolean(chatObjectClass, "isNotInChat", new Object[] {currentChat})) {
+        return false;
+      }
+
+      // Channels where we can't post.
+      if (!invokeStaticBoolean(chatObjectClass, "canWriteToChat", new Object[] {currentChat})) {
+        return false;
+      }
+
+      // Muted by permissions / bans.
+      if (!invokeStaticBoolean(chatObjectClass, "canSendMessages", new Object[] {currentChat})) {
+        return false;
+      }
+
+      // Closed forum topic (unless we can manage it).
+      Object forumTopic = null;
+      try {
+        forumTopic = findField(chatActivity.getClass(), "forumTopic").get(chatActivity);
+      } catch (NoSuchFieldException ignored) {
+        // Ignore.
+      }
+      if (forumTopic != null) {
+        boolean closed = false;
+        try {
+          closed = findField(forumTopic.getClass(), "closed").getBoolean(forumTopic);
+        } catch (NoSuchFieldException ignored) {
+          // Ignore.
+        }
+        if (closed) {
+          int currentAccount = 0;
+          try {
+            currentAccount =
+                findField(chatActivity.getClass(), "currentAccount").getInt(chatActivity);
+          } catch (NoSuchFieldException ignored) {
+            // Ignore.
+          }
+
+          Boolean canManageTopic =
+              invokeStaticBooleanOrNull(
+                  chatObjectClass,
+                  "canManageTopic",
+                  new Object[] {currentAccount, currentChat, forumTopic});
+          if (canManageTopic != null && !canManageTopic) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    } catch (Throwable t) {
+      // Fail open: keep the option available if Telegram internals change.
+      return true;
+    }
+  }
+
+  private static boolean invokeStaticBoolean(Class<?> type, String name, Object[] args)
+      throws Exception {
+    Boolean result = invokeStaticBooleanOrNull(type, name, args);
+    return Boolean.TRUE.equals(result);
+  }
+
+  private static Boolean invokeStaticBooleanOrNull(Class<?> type, String name, Object[] args)
+      throws Exception {
+    int paramCount = args != null ? args.length : 0;
+    for (Method method : type.getDeclaredMethods()) {
+      if (!name.equals(method.getName()) || method.getParameterCount() != paramCount) {
+        continue;
+      }
+      // Disambiguate ChatObject.canManageTopic overloads: we want the one that takes a topic
+      // object (not a long topicId).
+      if ("canManageTopic".equals(name)
+          && paramCount == 3
+          && method.getParameterTypes()[2] == long.class) {
+        continue;
+      }
+      method.setAccessible(true);
+      Object result = method.invoke(null, args);
+      if (result instanceof Boolean) {
+        return (Boolean) result;
+      }
+    }
+    return null;
+  }
+
+  @SuppressWarnings("unchecked")
+  private void addPlusOneToMessageMenu(Object chatActivity, Object[] args) {
+    if (!canSendToCurrentConversation(chatActivity)) {
+      return;
+    }
+    if (args == null || args.length < 4) {
+      return;
+    }
+    Object iconsRaw = args[1];
+    Object itemsRaw = args[2];
+    Object optionsRaw = args[3];
+    if (!(iconsRaw instanceof java.util.ArrayList)
+        || !(itemsRaw instanceof java.util.ArrayList)
+        || !(optionsRaw instanceof java.util.ArrayList)) {
+      return;
+    }
+    java.util.ArrayList<Integer> icons = (java.util.ArrayList<Integer>) iconsRaw;
+    java.util.ArrayList<CharSequence> items = (java.util.ArrayList<CharSequence>) itemsRaw;
+    java.util.ArrayList<Integer> options = (java.util.ArrayList<Integer>) optionsRaw;
+
+    if (options.contains(OPTION_PLUS_ONE)) {
+      return;
+    }
+
+    int optionForward = getStaticIntFieldValue(chatActivity.getClass(), "OPTION_FORWARD", 2);
+    int forwardIndex = options.indexOf(optionForward);
+    if (forwardIndex < 0) {
+      return;
+    }
+
+    int insertIndex = Math.min(forwardIndex + 1, options.size());
+    Integer forwardIcon = forwardIndex < icons.size() ? icons.get(forwardIndex) : 0;
+    int plusIcon =
+        resolveTelegramDrawable(
+            chatActivity.getClass().getClassLoader(), "msg_filled_plus", forwardIcon);
+
+    options.add(insertIndex, OPTION_PLUS_ONE);
+    items.add(insertIndex, "+1");
+    icons.add(Math.min(insertIndex, icons.size()), plusIcon);
+  }
+
+  @SuppressWarnings("unchecked")
+  private void forwardSelectedMessageToCurrentChat(Object chatActivity) {
+    try {
+      Object selectedObject =
+          findField(chatActivity.getClass(), "selectedObject").get(chatActivity);
+      if (selectedObject == null) {
+        return;
+      }
+      Object selectedObjectGroup =
+          findField(chatActivity.getClass(), "selectedObjectGroup").get(chatActivity);
+
+      java.util.ArrayList<Object> messages = new java.util.ArrayList<>();
+      if (selectedObjectGroup != null) {
+        Object groupMessages =
+            findField(selectedObjectGroup.getClass(), "messages").get(selectedObjectGroup);
+        if (groupMessages instanceof java.util.ArrayList) {
+          messages.addAll((java.util.ArrayList<?>) groupMessages);
+        }
+      } else {
+        messages.add(selectedObject);
+      }
+      if (messages.isEmpty()) {
+        return;
+      }
+
+      // Prefer Telegram's internal sending path for forwarding inside the current chat.
+      Method forwardMessages = null;
+      for (Method method : chatActivity.getClass().getDeclaredMethods()) {
+        if ("forwardMessages".equals(method.getName()) && method.getParameterCount() == 6) {
+          forwardMessages = method;
+          break;
+        }
+      }
+      if (forwardMessages != null) {
+        forwardMessages.setAccessible(true);
+        forwardMessages.invoke(chatActivity, messages, false, false, true, 0, 0L);
+        return;
+      }
+
+      // Fallback: show the forward panel (user still needs to tap send).
+      Method showFieldPanelForForward =
+          chatActivity
+              .getClass()
+              .getMethod("showFieldPanelForForward", boolean.class, java.util.ArrayList.class);
+      showFieldPanelForForward.invoke(chatActivity, true, messages);
+    } catch (Throwable t) {
+      logError("Failed to +1 forward message", t);
+    }
+  }
+
   private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
     Class<?> current = type;
     while (current != null) {
@@ -248,6 +514,32 @@ public final class TelegramHooksModule extends XposedModule {
     @AfterInvocation
     public static void after(XposedInterface.AfterHookCallback callback) throws Throwable {
       module().neutralizePullingDownTarget(callback.getThisObject());
+    }
+  }
+
+  @XposedHooker
+  public static final class FillMessageMenuHooker implements XposedInterface.Hooker {
+    @AfterInvocation
+    public static void after(XposedInterface.AfterHookCallback callback) {
+      TelegramHooksModule module = module();
+      module.addPlusOneToMessageMenu(callback.getThisObject(), callback.getArgs());
+    }
+  }
+
+  @XposedHooker
+  public static final class ProcessSelectedOptionHooker implements XposedInterface.Hooker {
+    @BeforeInvocation
+    public static void before(XposedInterface.BeforeHookCallback callback) {
+      Object[] args = callback.getArgs();
+      if (args == null || args.length < 1 || !(args[0] instanceof Integer)) {
+        return;
+      }
+      int option = (Integer) args[0];
+      if (option != OPTION_PLUS_ONE) {
+        return;
+      }
+      module().forwardSelectedMessageToCurrentChat(callback.getThisObject());
+      // Do not skip: let Telegram close the menu & clear internal selection state.
     }
   }
 

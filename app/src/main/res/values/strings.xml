@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="app_name">MxGram</string>
-  <string name="module_description">Disable Telegram channel pull-down jumping, double-tap reactions, and tap-to-send greeting stickers.</string>
+  <string name="module_description">Disable Telegram channel pull-down jumping, double-tap reactions, and tap-to-send greeting stickers; add a +1 menu item to forward messages to the current chat.</string>
 </resources>

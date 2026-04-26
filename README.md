@@ -2,11 +2,12 @@
 
 MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
 
-当前模块只做三件事：
+当前模块只做四件事：
 
 - 禁用频道页下滑后跳转到下一个频道
 - 禁用双击消息直接发送 reaction
 - 禁用点击 greeting sticker 直接发送贴纸
+- 在消息菜单中增加 `+1`：将消息“带引用转发”到当前会话
 
 ## 当前行为
 
@@ -15,6 +16,7 @@ MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
 - 在频道页面继续下滑，不会再触发 Telegram 原生的“跳到下一个频道”
 - 双击消息，不会再触发 Telegram 原生的快速 reaction
 - 在空白聊天页或 greeting 场景里点击问候贴纸，不会再直接发送 sticker
+- 当当前会话允许发消息时，长按/点按消息弹出的菜单里会多一个 `+1`，点它会把这条消息以“转发（带来源信息）”的形式重新发到当前会话
 
 模块默认只作用于官方 Telegram 包名：`org.telegram.messenger`
 
@@ -38,6 +40,13 @@ MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
   - 当 `fromDoubleTap == true` 时直接拦截，作为双保险
 
 主实现文件：`app/src/main/java/dev/xyenon/mxgram/TelegramHooksModule.java`
+
+新增 `+1` 的 hook 点：
+
+- `org.telegram.ui.ChatActivity.fillMessageMenu(...)`
+  - 在 Telegram 生成消息菜单选项列表后，插入一个自定义的 `+1`
+- `org.telegram.ui.ChatActivity.processSelectedOption(int)`
+  - 拦截自定义选项并调用 Telegram 内部的 `forwardMessages(...)`，把选中消息转发到当前会话
 
 ## 项目结构
 
