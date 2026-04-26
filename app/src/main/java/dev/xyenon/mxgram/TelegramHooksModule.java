@@ -1,6 +1,7 @@
 package dev.xyenon.mxgram;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.view.View;
 import io.github.libxposed.api.XposedInterface;
 import io.github.libxposed.api.XposedModule;
@@ -13,16 +14,37 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Objects;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class TelegramHooksModule extends XposedModule {
   private static final String TAG = "MxGram";
   private static final String TARGET_PACKAGE = "org.telegram.messenger";
   private static final int OPTION_PLUS_ONE = 0x4D584701; // "MXG\u0001"
+  private static final long PLUS_ONE_REPLY_TTL_MS = 60_000;
+
+  private static final AtomicReference<PendingPlusOneReply> pendingPlusOneReply =
+      new AtomicReference<>(null);
+
   private static volatile TelegramHooksModule instance;
 
   private final AtomicBoolean hooksInstalled = new AtomicBoolean(false);
   private final String processName;
+
+  private final WeakHashMap<Object, Integer> plusOneMenuIndex = new WeakHashMap<>();
+
+  private static final class PendingPlusOneReply {
+    private final Object replyToMsg;
+    private final int selectedMsgId;
+    private final long createdAtUptimeMs;
+
+    private PendingPlusOneReply(Object replyToMsg, int selectedMsgId) {
+      this.replyToMsg = replyToMsg;
+      this.selectedMsgId = selectedMsgId;
+      this.createdAtUptimeMs = SystemClock.uptimeMillis();
+    }
+  }
 
   public TelegramHooksModule(XposedInterface base, XposedModuleInterface.ModuleLoadedParam param) {
     super(base, param);
@@ -68,7 +90,7 @@ public final class TelegramHooksModule extends XposedModule {
     hookPlusOneForward(chatActivityClass);
   }
 
-  private void hookPlusOneForward(Class<?> chatActivityClass) throws NoSuchMethodException {
+  private void hookPlusOneForward(Class<?> chatActivityClass) throws Exception {
     Method fillMessageMenu = null;
     for (Method method : chatActivityClass.getDeclaredMethods()) {
       if ("fillMessageMenu".equals(method.getName()) && method.getParameterCount() == 4) {
@@ -86,6 +108,19 @@ public final class TelegramHooksModule extends XposedModule {
         chatActivityClass.getDeclaredMethod("processSelectedOption", int.class);
     processSelectedOption.setAccessible(true);
     hook(processSelectedOption, ProcessSelectedOptionHooker.class);
+
+    Method createMenu = null;
+    for (Method method : chatActivityClass.getDeclaredMethods()) {
+      if ("createMenu".equals(method.getName()) && method.getParameterCount() == 8) {
+        createMenu = method;
+        break;
+      }
+    }
+    if (createMenu == null) {
+      throw new IllegalStateException("ChatActivity.createMenu(...) not found");
+    }
+    createMenu.setAccessible(true);
+    hook(createMenu, CreateMenuHooker.class);
   }
 
   private void hookAnimateToNextChat(Class<?> chatActivityClass) throws NoSuchMethodException {
@@ -371,6 +406,7 @@ public final class TelegramHooksModule extends XposedModule {
     java.util.ArrayList<Integer> options = (java.util.ArrayList<Integer>) optionsRaw;
 
     if (options.contains(OPTION_PLUS_ONE)) {
+      plusOneMenuIndex.put(chatActivity, options.indexOf(OPTION_PLUS_ONE));
       return;
     }
 
@@ -389,6 +425,105 @@ public final class TelegramHooksModule extends XposedModule {
     options.add(insertIndex, OPTION_PLUS_ONE);
     items.add(insertIndex, "+1");
     icons.add(Math.min(insertIndex, icons.size()), plusIcon);
+
+    plusOneMenuIndex.put(chatActivity, insertIndex);
+  }
+
+  private void attachLongPressToPlusOneMenuItem(Object chatActivity) {
+    Integer index = plusOneMenuIndex.remove(chatActivity);
+    if (index == null) {
+      return;
+    }
+    try {
+      Object itemsRaw =
+          findField(chatActivity.getClass(), "scrimPopupWindowItems").get(chatActivity);
+      if (!(itemsRaw instanceof Object[])) {
+        return;
+      }
+      Object[] items = (Object[]) itemsRaw;
+      if (index < 0 || index >= items.length) {
+        return;
+      }
+      Object item = items[index];
+      if (!(item instanceof View)) {
+        return;
+      }
+      View view = (View) item;
+      view.setOnLongClickListener(v -> module().onPlusOneLongPressed(chatActivity, v));
+    } catch (Throwable t) {
+      logError("Failed to attach +1 long-press listener", t);
+    }
+  }
+
+  private boolean onPlusOneLongPressed(Object chatActivity, View menuItemView) {
+    try {
+      PendingPlusOneReply pending = buildPendingPlusOneReply(chatActivity);
+      pendingPlusOneReply.set(pending);
+      // Reuse Telegram's normal click flow (it will close the menu and clear selection state).
+      menuItemView.performClick();
+      return true;
+    } catch (Throwable t) {
+      logError("Failed to handle +1 long-press", t);
+      return false;
+    }
+  }
+
+  private PendingPlusOneReply buildPendingPlusOneReply(Object chatActivity) {
+    try {
+      Object selectedObject =
+          findField(chatActivity.getClass(), "selectedObject").get(chatActivity);
+      if (selectedObject == null) {
+        return null;
+      }
+
+      // Only support single-message replies for now.
+      Object selectedObjectGroup =
+          findField(chatActivity.getClass(), "selectedObjectGroup").get(chatActivity);
+      if (selectedObjectGroup != null) {
+        return null;
+      }
+
+      Method getReplyMsgId = selectedObject.getClass().getMethod("getReplyMsgId");
+      int replyMsgId = (Integer) getReplyMsgId.invoke(selectedObject);
+      if (replyMsgId <= 0) {
+        return null;
+      }
+
+      // Only handle replies within the same dialog (reply_to_peer_id should be null).
+      Object messageOwner =
+          findField(selectedObject.getClass(), "messageOwner").get(selectedObject);
+      if (messageOwner != null) {
+        Object replyHeader = null;
+        try {
+          replyHeader = findField(messageOwner.getClass(), "reply_to").get(messageOwner);
+        } catch (NoSuchFieldException ignored) {
+          // Ignore.
+        }
+        if (replyHeader != null) {
+          Object replyToPeerId = null;
+          try {
+            replyToPeerId = findField(replyHeader.getClass(), "reply_to_peer_id").get(replyHeader);
+          } catch (NoSuchFieldException ignored) {
+            // Ignore.
+          }
+          if (replyToPeerId != null) {
+            return null;
+          }
+        }
+      }
+
+      Object replyToMsg =
+          findField(selectedObject.getClass(), "replyMessageObject").get(selectedObject);
+      if (replyToMsg == null) {
+        return null;
+      }
+
+      int selectedMsgId =
+          (Integer) selectedObject.getClass().getMethod("getId").invoke(selectedObject);
+      return new PendingPlusOneReply(replyToMsg, selectedMsgId);
+    } catch (Throwable t) {
+      return null;
+    }
   }
 
   @SuppressWarnings("unchecked")
@@ -399,6 +534,26 @@ public final class TelegramHooksModule extends XposedModule {
       if (selectedObject == null) {
         return;
       }
+
+      // Reply case: Telegram doesn't support replying with a forwarded (quoted) message.
+      // When user long-presses +1 on a reply, we re-send the content as a normal message and
+      // keep the reply target.
+      PendingPlusOneReply pending = pendingPlusOneReply.getAndSet(null);
+      if (pending != null
+          && SystemClock.uptimeMillis() - pending.createdAtUptimeMs <= PLUS_ONE_REPLY_TTL_MS) {
+        try {
+          int selectedId =
+              (Integer) selectedObject.getClass().getMethod("getId").invoke(selectedObject);
+          if (selectedId == pending.selectedMsgId && pending.replyToMsg != null) {
+            if (repeatSelectedMessageAsReply(chatActivity, selectedObject, pending.replyToMsg)) {
+              return;
+            }
+          }
+        } catch (Throwable ignored) {
+          // Ignore.
+        }
+      }
+
       Object selectedObjectGroup =
           findField(chatActivity.getClass(), "selectedObjectGroup").get(chatActivity);
 
@@ -438,6 +593,129 @@ public final class TelegramHooksModule extends XposedModule {
       showFieldPanelForForward.invoke(chatActivity, true, messages);
     } catch (Throwable t) {
       logError("Failed to +1 forward message", t);
+    }
+  }
+
+  private boolean repeatSelectedMessageAsReply(
+      Object chatActivity, Object selectedObject, Object replyToMsg) {
+    if (replyToMsg == null || selectedObject == null) {
+      return false;
+    }
+    try {
+      long dialogId = (Long) chatActivity.getClass().getMethod("getDialogId").invoke(chatActivity);
+      Object replyToTopMsg =
+          chatActivity.getClass().getMethod("getThreadMessage").invoke(chatActivity);
+      Object sendMessagesHelper =
+          chatActivity.getClass().getMethod("getSendMessagesHelper").invoke(chatActivity);
+      if (sendMessagesHelper == null) {
+        return false;
+      }
+
+      boolean isSticker =
+          Boolean.TRUE.equals(
+              selectedObject.getClass().getMethod("isAnyKindOfSticker").invoke(selectedObject));
+      if (isSticker) {
+        Object document = selectedObject.getClass().getMethod("getDocument").invoke(selectedObject);
+        if (document == null) {
+          return false;
+        }
+        Method sendSticker = null;
+        for (Method method : sendMessagesHelper.getClass().getDeclaredMethods()) {
+          if ("sendSticker".equals(method.getName()) && method.getParameterCount() == 18) {
+            sendSticker = method;
+            break;
+          }
+        }
+        if (sendSticker == null) {
+          return false;
+        }
+
+        long monoForumPeer = 0L;
+        try {
+          monoForumPeer =
+              (Long)
+                  chatActivity.getClass().getMethod("getSendMonoForumPeerId").invoke(chatActivity);
+        } catch (NoSuchMethodException ignored) {
+          // Ignore.
+        }
+        Object suggestionParams = null;
+        try {
+          suggestionParams =
+              chatActivity
+                  .getClass()
+                  .getMethod("getSendMessageSuggestionParams")
+                  .invoke(chatActivity);
+        } catch (NoSuchMethodException ignored) {
+          // Ignore.
+        }
+
+        sendSticker.setAccessible(true);
+        sendSticker.invoke(
+            sendMessagesHelper,
+            document,
+            null,
+            dialogId,
+            replyToMsg,
+            replyToTopMsg,
+            null,
+            null,
+            null,
+            true,
+            0,
+            0,
+            false,
+            null,
+            null,
+            0,
+            0L,
+            monoForumPeer,
+            suggestionParams);
+        return true;
+      }
+
+      Object messageOwner =
+          findField(selectedObject.getClass(), "messageOwner").get(selectedObject);
+      if (messageOwner == null) {
+        return false;
+      }
+      Object messageRaw = findField(messageOwner.getClass(), "message").get(messageOwner);
+      if (!(messageRaw instanceof String) || ((String) messageRaw).isEmpty()) {
+        return false;
+      }
+      String message = (String) messageRaw;
+
+      ClassLoader classLoader = chatActivity.getClass().getClassLoader();
+      if (classLoader == null) {
+        return false;
+      }
+      Class<?> sendMessageParamsClass =
+          Class.forName(
+              "org.telegram.messenger.SendMessagesHelper$SendMessageParams", false, classLoader);
+      Method of = sendMessageParamsClass.getDeclaredMethod("of", String.class, long.class);
+      of.setAccessible(true);
+      Object params = of.invoke(null, message, dialogId);
+      findField(params.getClass(), "replyToMsg").set(params, replyToMsg);
+      findField(params.getClass(), "replyToTopMsg").set(params, replyToTopMsg);
+      findField(params.getClass(), "notify").setBoolean(params, true);
+
+      Method sendMessage = null;
+      for (Method method : sendMessagesHelper.getClass().getDeclaredMethods()) {
+        if ("sendMessage".equals(method.getName())
+            && method.getParameterCount() == 1
+            && sendMessageParamsClass.equals(method.getParameterTypes()[0])) {
+          sendMessage = method;
+          break;
+        }
+      }
+      if (sendMessage == null) {
+        return false;
+      }
+      sendMessage.setAccessible(true);
+      sendMessage.invoke(sendMessagesHelper, params);
+      return true;
+    } catch (Throwable t) {
+      logError("Failed to +1 repeat-reply message", t);
+      return false;
     }
   }
 
@@ -523,6 +801,18 @@ public final class TelegramHooksModule extends XposedModule {
     public static void after(XposedInterface.AfterHookCallback callback) {
       TelegramHooksModule module = module();
       module.addPlusOneToMessageMenu(callback.getThisObject(), callback.getArgs());
+    }
+  }
+
+  @XposedHooker
+  public static final class CreateMenuHooker implements XposedInterface.Hooker {
+    @AfterInvocation
+    public static void after(XposedInterface.AfterHookCallback callback) {
+      Object result = callback.getResult();
+      if (!(result instanceof Boolean) || !Boolean.TRUE.equals(result)) {
+        return;
+      }
+      module().attachLongPressToPlusOneMenuItem(callback.getThisObject());
     }
   }
 
