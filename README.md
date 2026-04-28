@@ -4,12 +4,13 @@
 
 ## 功能
 
-| 功能                          | 说明                                                   |
-| ----------------------------- | ------------------------------------------------------ |
-| 🚫 禁用下拉跳转               | 在频道页下滑时不再跳转到下一个频道                     |
-| 🚫 禁用双击 reaction          | 双击消息不再触发快速 reaction                          |
-| 🚫 禁用 greeting sticker 发送 | 点击问候贴纸不再直接发送，仅保留展示                   |
-| ➕ 消息 `+1` 重发             | 在消息菜单中新增 `+1` 选项，快速转发或按原回复关系重发 |
+| 功能                          | 说明                                                        |
+| ----------------------------- | ----------------------------------------------------------- |
+| 🚫 禁用下拉跳转               | 在频道页下滑时不再跳转到下一个频道                          |
+| 🚫 禁用双击 reaction          | 双击消息不再触发快速 reaction                               |
+| 🚫 禁用 greeting sticker 发送 | 点击问候贴纸不再直接发送，仅保留展示                        |
+| ➕ 消息 `+1` 重发             | 在消息菜单中新增 `+1` 选项，快速转发或按原回复关系重发      |
+| 🆔 头像下显示 ID              | 资料页头像区域下方显示用户 / 群组 / 频道 API ID，长按可复制 |
 
 ### `+1` 详细说明
 
@@ -97,11 +98,14 @@ nix develop -c ./gradlew assembleDebug
 | `ChatActivity.fillMessageMenu`        | 插入 `+1` 菜单项           | 在菜单列表追加自定义选项         |
 | `ChatActivity.processSelectedOption`  | 执行 `+1` 转发             | 调用内部 `forwardMessages()`     |
 | `ChatActivity.createMenu`             | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发       |
+| `ProfileActivity.createView`          | 添加资料页 ID 文本         | 在头像容器追加只读 `TextView`    |
+| `ProfileActivity.updateProfileData`   | 刷新资料页 ID              | 同步用户 / 群组 / 频道 API ID    |
+| `ProfileActivity` 布局 / 展开方法     | 对齐资料页 ID              | 跟随头像区域位置、颜色和透明度   |
 
 主实现文件：`app/src/main/kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt`
 
 > 若 Telegram 升级后 hook 失效，优先检查以下类：
-> `ChatActivity`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`ChatActivity.selectReaction`
+> `ChatActivity`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`ProfileActivity`、`ChatActivity.selectReaction`
 
 ## 依赖说明
 

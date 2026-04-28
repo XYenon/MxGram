@@ -119,3 +119,39 @@ class ProcessSelectedOptionHooker : XposedInterface.Hooker {
         }
     }
 }
+
+@XposedHooker
+class ProfileCreateViewHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        @AfterInvocation
+        fun after(callback: XposedInterface.AfterHookCallback) {
+            val profileActivity = callback.thisObject ?: return
+            TelegramHooksModule.currentModule().installProfileIdDisplay(profileActivity)
+        }
+    }
+}
+
+@XposedHooker
+class ProfileUpdateDataHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        @AfterInvocation
+        fun after(callback: XposedInterface.AfterHookCallback) {
+            val profileActivity = callback.thisObject ?: return
+            TelegramHooksModule.currentModule().updateProfileIdDisplay(profileActivity)
+        }
+    }
+}
+
+@XposedHooker
+class ProfileLayoutHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        @AfterInvocation
+        fun after(callback: XposedInterface.AfterHookCallback) {
+            val profileActivity = callback.thisObject ?: return
+            TelegramHooksModule.currentModule().syncProfileIdDisplay(profileActivity)
+        }
+    }
+}

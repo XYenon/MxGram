@@ -13,6 +13,7 @@ class TelegramHooksModule(
     private val hooksInstalled = AtomicBoolean(false)
     private val processName = param.processName
     private val plusOneForwarder = PlusOneForwarder { message, throwable -> logError(message, throwable) }
+    private val profileIdDisplay = ProfileIdDisplay { message, throwable -> logError(message, throwable) }
 
     init {
         instance = this
@@ -40,6 +41,7 @@ class TelegramHooksModule(
     @Throws(Exception::class)
     private fun installHooks(classLoader: ClassLoader) {
         val chatActivityClass = Class.forName("org.telegram.ui.ChatActivity", false, classLoader)
+        val profileActivityClass = Class.forName("org.telegram.ui.ProfileActivity", false, classLoader)
         val chatGreetingsViewClass =
             Class.forName("org.telegram.ui.Components.ChatGreetingsView", false, classLoader)
         val pullingDownDrawableClass =
@@ -51,6 +53,31 @@ class TelegramHooksModule(
         hookSelectReaction(chatActivityClass)
         hookPullingDownTargets(pullingDownDrawableClass)
         hookPlusOneForward(chatActivityClass)
+        hookProfileIdDisplay(profileActivityClass)
+    }
+
+    private fun hookProfileIdDisplay(profileActivityClass: Class<*>) {
+        try {
+            val createView = profileActivityClass.getDeclaredMethod("createView", Context::class.java)
+            createView.isAccessible = true
+            hook(createView, ProfileCreateViewHooker::class.java)
+
+            val updateProfileData =
+                profileActivityClass.getDeclaredMethod("updateProfileData", java.lang.Boolean.TYPE)
+            updateProfileData.isAccessible = true
+            hook(updateProfileData, ProfileUpdateDataHooker::class.java)
+
+            val needLayout = profileActivityClass.getDeclaredMethod("needLayout", java.lang.Boolean.TYPE)
+            needLayout.isAccessible = true
+            hook(needLayout, ProfileLayoutHooker::class.java)
+
+            val setAvatarExpandProgress =
+                profileActivityClass.getDeclaredMethod("setAvatarExpandProgress", java.lang.Float.TYPE)
+            setAvatarExpandProgress.isAccessible = true
+            hook(setAvatarExpandProgress, ProfileLayoutHooker::class.java)
+        } catch (t: Throwable) {
+            logError("Failed to install profile ID display hook", t)
+        }
     }
 
     @Throws(Exception::class)
@@ -159,6 +186,18 @@ class TelegramHooksModule(
 
     internal fun forwardSelectedMessageToCurrentChat(chatActivity: Any) {
         plusOneForwarder.forwardSelectedMessageToCurrentChat(chatActivity)
+    }
+
+    internal fun installProfileIdDisplay(profileActivity: Any) {
+        profileIdDisplay.install(profileActivity)
+    }
+
+    internal fun updateProfileIdDisplay(profileActivity: Any) {
+        profileIdDisplay.update(profileActivity)
+    }
+
+    internal fun syncProfileIdDisplay(profileActivity: Any) {
+        profileIdDisplay.sync(profileActivity)
     }
 
     private fun logInfo(message: String) {
