@@ -20,7 +20,7 @@ This file applies to the entire repository.
 
 ## Source Of Truth
 
-- Main hook implementation: `app/src/main/java/dev/xyenon/mxgram/TelegramHooksModule.java`
+- Main hook implementation: `app/src/main/kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt`
 - Xposed metadata: `app/src/main/resources/META-INF/xposed/`
 - Android module config: `app/build.gradle.kts`
 - Development environment: `flake.nix` and `.envrc`

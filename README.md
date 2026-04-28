@@ -41,7 +41,7 @@ MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
 - `org.telegram.ui.ChatActivity.selectReaction(..., fromDoubleTap, ...)`
   - 当 `fromDoubleTap == true` 时直接拦截，作为双保险
 
-主实现文件：`app/src/main/java/dev/xyenon/mxgram/TelegramHooksModule.java`
+主实现文件：`app/src/main/kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt`
 
 新增 `+1` 的 hook 点：
 
@@ -60,7 +60,7 @@ MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
 │   ├── build.gradle.kts
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       ├── java/dev/xyenon/mxgram/TelegramHooksModule.java
+│       ├── kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt
 │       ├── res/values/strings.xml
 │       └── resources/META-INF/xposed/
 │           ├── java_init.list
@@ -76,6 +76,7 @@ MxGram 是一个针对 Telegram Android 的 LSPosed modern API 100 模块。
 ## 技术栈
 
 - Android Gradle Plugin
+- AGP 9 内置 Kotlin 支持
 - Java 17 源码目标
 - LSPosed modern API 100
 - Nix Flake + direnv 开发环境
@@ -195,7 +196,7 @@ io.github.libxposed:api:-100-ge2588ee-22@aar
 如果要支持更多 Telegram 变体，可以修改：
 
 - `app/src/main/resources/META-INF/xposed/scope.list`
-- `TelegramHooksModule.java` 中的 `TARGET_PACKAGE`
+- `TelegramHooksModule.kt` 中的 `TARGET_PACKAGE`
 
 如果 Telegram 升级后导致 hook 失效，优先重新检查以下类：
 
