@@ -85,8 +85,6 @@ nix develop -c ./gradlew assembleDebug
 
 ## 实现细节
 
-模块以「禁用 Telegram 原生行为」为目标，而非重新实现手势逻辑。
-
 ### Hook 点一览
 
 | Hook 位置                             | 目的                       | 策略                             |
