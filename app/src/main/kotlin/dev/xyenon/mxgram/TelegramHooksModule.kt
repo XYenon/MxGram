@@ -41,12 +41,18 @@ class TelegramHooksModule(
     @Throws(Exception::class)
     private fun installHooks(classLoader: ClassLoader) {
         val chatActivityClass = Class.forName("org.telegram.ui.ChatActivity", false, classLoader)
+        val messagesControllerClass =
+            Class.forName("org.telegram.messenger.MessagesController", false, classLoader)
+        val messageObjectClass = Class.forName("org.telegram.messenger.MessageObject", false, classLoader)
+        val tlrpcMessageClass = Class.forName("org.telegram.tgnet.TLRPC\$Message", false, classLoader)
         val profileActivityClass = Class.forName("org.telegram.ui.ProfileActivity", false, classLoader)
         val chatGreetingsViewClass =
             Class.forName("org.telegram.ui.Components.ChatGreetingsView", false, classLoader)
         val pullingDownDrawableClass =
             Class.forName("org.telegram.ui.ChatPullingDownDrawable", false, classLoader)
 
+        hookNoForwardsRestrictions(messagesControllerClass)
+        hookMessageNoForwardsFlag(messageObjectClass, tlrpcMessageClass)
         hookAnimateToNextChat(chatActivityClass)
         hookCreateView(chatActivityClass)
         hookGreetingStickerSend(chatGreetingsViewClass)
@@ -54,6 +60,50 @@ class TelegramHooksModule(
         hookPullingDownTargets(pullingDownDrawableClass)
         hookPlusOneForward(chatActivityClass)
         hookProfileIdDisplay(profileActivityClass)
+    }
+
+    private fun hookNoForwardsRestrictions(messagesControllerClass: Class<*>) {
+        try {
+            var hooked = 0
+            for (method in messagesControllerClass.declaredMethods) {
+                if (method.parameterCount != 1 || method.returnType != java.lang.Boolean.TYPE) {
+                    continue
+                }
+                if (
+                    method.name != "isChatNoForwards" &&
+                    method.name != "isUserNoForwards" &&
+                    method.name != "isPeerNoForwards"
+                ) {
+                    continue
+                }
+                method.isAccessible = true
+                hook(method, NoForwardsBypassHooker::class.java)
+                hooked += 1
+            }
+            check(hooked > 0) { "MessagesController noforwards methods not found" }
+        } catch (t: Throwable) {
+            logError("Failed to install noforwards bypass hook", t)
+        }
+    }
+
+    private fun hookMessageNoForwardsFlag(
+        messageObjectClass: Class<*>,
+        tlrpcMessageClass: Class<*>,
+    ) {
+        try {
+            var hooked = 0
+            for (constructor in messageObjectClass.declaredConstructors) {
+                if (!constructor.parameterTypes.any { param -> param == tlrpcMessageClass }) {
+                    continue
+                }
+                constructor.isAccessible = true
+                hook(constructor, ClearMessageNoForwardsHooker::class.java)
+                hooked += 1
+            }
+            check(hooked > 0) { "MessageObject constructors taking TLRPC.Message not found" }
+        } catch (t: Throwable) {
+            logError("Failed to install message noforwards cleanup hook", t)
+        }
     }
 
     private fun hookProfileIdDisplay(profileActivityClass: Class<*>) {

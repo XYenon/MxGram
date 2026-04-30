@@ -4,6 +4,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.annotations.AfterInvocation
 import io.github.libxposed.api.annotations.BeforeInvocation
 import io.github.libxposed.api.annotations.XposedHooker
+import java.lang.reflect.Field
 
 @XposedHooker
 class BlockAnimateToNextChatHooker : XposedInterface.Hooker {
@@ -152,6 +153,60 @@ class ProfileLayoutHooker : XposedInterface.Hooker {
         fun after(callback: XposedInterface.AfterHookCallback) {
             val profileActivity = callback.thisObject ?: return
             TelegramHooksModule.currentModule().syncProfileIdDisplay(profileActivity)
+        }
+    }
+}
+
+@XposedHooker
+class NoForwardsBypassHooker : XposedInterface.Hooker {
+    companion object {
+        @JvmStatic
+        @BeforeInvocation
+        fun before(callback: XposedInterface.BeforeHookCallback) {
+            callback.returnAndSkip(false)
+        }
+    }
+}
+
+@XposedHooker
+class ClearMessageNoForwardsHooker : XposedInterface.Hooker {
+    companion object {
+        @Volatile
+        private var disabled = false
+
+        @Volatile
+        private var messageOwnerField: Field? = null
+
+        @Volatile
+        private var messageNoForwardsField: Field? = null
+
+        @JvmStatic
+        @AfterInvocation
+        fun after(callback: XposedInterface.AfterHookCallback) {
+            if (disabled) {
+                return
+            }
+            val messageObject = callback.thisObject ?: return
+            try {
+                val ownerField =
+                    messageOwnerField ?: findField(messageObject.javaClass, "messageOwner").also {
+                        messageOwnerField = it
+                    }
+                val messageOwner = ownerField.get(messageObject) ?: return
+                val noforwardsField =
+                    messageNoForwardsField ?: findField(messageOwner.javaClass, "noforwards").also {
+                        messageNoForwardsField = it
+                    }
+                noforwardsField.setBoolean(messageOwner, false)
+            } catch (t: Throwable) {
+                // If Telegram changes the underlying field names, disable the hook to avoid
+                // spamming logs during scrolling.
+                disabled = true
+                TelegramHooksModule.currentModule().logError(
+                    "Failed to bypass Telegram noforwards message restriction",
+                    t,
+                )
+            }
         }
     }
 }

@@ -9,6 +9,7 @@
 | 🚫 禁用下拉跳转               | 在频道页下滑时不再跳转到下一个频道                          |
 | 🚫 禁用双击 reaction          | 双击消息不再触发快速 reaction                               |
 | 🚫 禁用 greeting sticker 发送 | 点击问候贴纸不再直接发送，仅保留展示                        |
+| 🔓 解除保护内容限制           | 允许在开启“限制保存内容”的会话中截图、复制等                |
 | ➕ 消息 `+1` 重发             | 在消息菜单中新增 `+1` 选项，快速转发或按原回复关系重发      |
 | 🆔 头像下显示 ID              | 资料页头像区域下方显示用户 / 群组 / 频道 API ID，长按可复制 |
 
@@ -98,6 +99,8 @@ nix develop -c ./gradlew assembleDebug
 | `ChatActivity.fillMessageMenu`        | 插入 `+1` 菜单项           | 在菜单列表追加自定义选项         |
 | `ChatActivity.processSelectedOption`  | 执行 `+1` 转发             | 调用内部 `forwardMessages()`     |
 | `ChatActivity.createMenu`             | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发       |
+| `MessagesController` noforwards 判断  | 解除保护内容限制           | 强制返回 `false`                 |
+| `MessageObject` 构造方法              | 解除保护内容限制           | 清除 `messageOwner.noforwards`   |
 | `ProfileActivity.createView`          | 添加资料页 ID 文本         | 在头像容器追加只读 `TextView`    |
 | `ProfileActivity.updateProfileData`   | 刷新资料页 ID              | 同步用户 / 群组 / 频道 API ID    |
 | `ProfileActivity` 布局 / 展开方法     | 对齐资料页 ID              | 跟随头像区域位置、颜色和透明度   |
