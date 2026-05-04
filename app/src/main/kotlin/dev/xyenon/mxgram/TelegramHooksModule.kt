@@ -53,6 +53,7 @@ class TelegramHooksModule(
 
         hookNoForwardsRestrictions(messagesControllerClass)
         hookMessageNoForwardsFlag(messageObjectClass, tlrpcMessageClass)
+        hookSelfDestructMediaProtection(chatActivityClass, messagesControllerClass)
         hookAnimateToNextChat(chatActivityClass)
         hookCreateView(chatActivityClass)
         hookGreetingStickerSend(chatGreetingsViewClass)
@@ -103,6 +104,57 @@ class TelegramHooksModule(
             check(hooked > 0) { "MessageObject constructors taking TLRPC.Message not found" }
         } catch (t: Throwable) {
             logError("Failed to install message noforwards cleanup hook", t)
+        }
+    }
+
+    private fun hookSelfDestructMediaProtection(
+        chatActivityClass: Class<*>,
+        messagesControllerClass: Class<*>,
+    ) {
+        try {
+            val sendSecretMessageRead =
+                chatActivityClass.declaredMethods.firstOrNull { method ->
+                    method.name == "sendSecretMessageRead" && method.parameterCount == 2
+                } ?: throw IllegalStateException("ChatActivity.sendSecretMessageRead(...) not found")
+            sendSecretMessageRead.isAccessible = true
+            hook(sendSecretMessageRead, SecretMessageReadHooker::class.java)
+
+            val sendSecretMediaDelete =
+                chatActivityClass.declaredMethods.firstOrNull { method ->
+                    method.name == "sendSecretMediaDelete" && method.parameterCount == 1
+                } ?: throw IllegalStateException("ChatActivity.sendSecretMediaDelete(...) not found")
+            sendSecretMediaDelete.isAccessible = true
+            hook(sendSecretMediaDelete, SecretMediaDeleteHooker::class.java)
+
+            val markMessageAsRead2 =
+                messagesControllerClass.declaredMethods.firstOrNull { method ->
+                    method.name == "markMessageAsRead2" && method.parameterCount == 6
+                } ?: throw IllegalStateException("MessagesController.markMessageAsRead2(...) not found")
+            markMessageAsRead2.isAccessible = true
+            hook(markMessageAsRead2, PreventDeleteTaskOnContentReadHooker::class.java)
+
+            val markMessageAsRead =
+                messagesControllerClass.declaredMethods.firstOrNull { method ->
+                    method.name == "markMessageAsRead" && method.parameterCount == 3
+                } ?: throw IllegalStateException("MessagesController.markMessageAsRead(...) not found")
+            markMessageAsRead.isAccessible = true
+            hook(markMessageAsRead, PreventDeleteTaskOnSecretChatReadHooker::class.java)
+
+            val createDeleteShowOnceTask =
+                messagesControllerClass.declaredMethods.firstOrNull { method ->
+                    method.name == "createDeleteShowOnceTask" && method.parameterCount == 2
+                } ?: throw IllegalStateException("MessagesController.createDeleteShowOnceTask(...) not found")
+            createDeleteShowOnceTask.isAccessible = true
+            hook(createDeleteShowOnceTask, BlockCreateDeleteShowOnceTaskHooker::class.java)
+
+            val doDeleteShowOnceTask =
+                messagesControllerClass.declaredMethods.firstOrNull { method ->
+                    method.name == "doDeleteShowOnceTask" && method.parameterCount == 3
+                } ?: throw IllegalStateException("MessagesController.doDeleteShowOnceTask(...) not found")
+            doDeleteShowOnceTask.isAccessible = true
+            hook(doDeleteShowOnceTask, BlockDoDeleteShowOnceTaskHooker::class.java)
+        } catch (t: Throwable) {
+            logError("Failed to install self-destruct media protection hook", t)
         }
     }
 
@@ -219,6 +271,58 @@ class TelegramHooksModule(
     }
 
     @Throws(Exception::class)
+    internal fun buildSelfDestructMediaReadAction(
+        chatActivity: Any,
+        messageObject: Any,
+        readNow: Boolean,
+    ): Runnable? {
+        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return null
+        val destroyTime = findField(messageOwner.javaClass, "destroyTime").getInt(messageOwner)
+        val ttl = findField(messageOwner.javaClass, "ttl").getInt(messageOwner)
+        val isOut = findMethod(messageObject.javaClass, "isOut").invoke(messageObject) == true
+        val isSecretMedia = findMethod(messageObject.javaClass, "isSecretMedia").invoke(messageObject) == true
+        if (isOut || !isSecretMedia || destroyTime != 0 || ttl <= 0) {
+            return null
+        }
+
+        val action =
+            Runnable {
+                try {
+                    markSelfDestructMediaAsReadWithoutDeleteTask(chatActivity, messageObject)
+                } catch (t: Throwable) {
+                    logError("Failed to keep self-destruct media after opening", t)
+                }
+            }
+        return if (readNow) {
+            action.run()
+            null
+        } else {
+            action
+        }
+    }
+
+    @Throws(Exception::class)
+    internal fun disarmSelfDestructDeleteTask(args: Array<Any?>?) {
+        if (args == null || args.size < 6) {
+            return
+        }
+        if (args[5] == true) {
+            args[5] = false
+        }
+    }
+
+    @Throws(Exception::class)
+    internal fun disarmSecretChatDeleteTask(args: Array<Any?>?) {
+        if (args == null || args.size < 3) {
+            return
+        }
+        val ttl = args[2] as? Int ?: return
+        if (ttl > 0) {
+            args[2] = Int.MIN_VALUE
+        }
+    }
+
+    @Throws(Exception::class)
     internal fun clearGreetingStickerListener(chatGreetingsView: Any) {
         findField(chatGreetingsView.javaClass, "listener").set(chatGreetingsView, null)
     }
@@ -248,6 +352,41 @@ class TelegramHooksModule(
 
     internal fun syncProfileIdDisplay(profileActivity: Any) {
         profileIdDisplay.sync(profileActivity)
+    }
+
+    @Throws(Exception::class)
+    private fun markSelfDestructMediaAsReadWithoutDeleteTask(
+        chatActivity: Any,
+        messageObject: Any,
+    ) {
+        val dialogId = findField(chatActivity.javaClass, "dialog_id").getLong(chatActivity)
+        val currentEncryptedChat = findField(chatActivity.javaClass, "currentEncryptedChat").get(chatActivity)
+        val messagesController =
+            findMethod(chatActivity.javaClass, "getMessagesController").invoke(chatActivity)
+                ?: return
+        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return
+        val ttl = findField(messageOwner.javaClass, "ttl").getInt(messageOwner)
+        val normalizedTtl = if (ttl == Int.MAX_VALUE) 0 else ttl
+
+        if (currentEncryptedChat != null) {
+            val randomId = findField(messageOwner.javaClass, "random_id").getLong(messageOwner)
+            val markMessageAsRead =
+                messagesController.javaClass.declaredMethods.firstOrNull { method ->
+                    method.name == "markMessageAsRead" && method.parameterCount == 3
+                } ?: throw IllegalStateException("MessagesController.markMessageAsRead(...) not found")
+            markMessageAsRead.isAccessible = true
+            val readReceiptTtl = if (normalizedTtl > 0) Int.MIN_VALUE else normalizedTtl
+            markMessageAsRead.invoke(messagesController, dialogId, randomId, readReceiptTtl)
+            return
+        }
+
+        val messageId = (findMethod(messageObject.javaClass, "getId").invoke(messageObject) as Number).toInt()
+        val markMessageAsRead2 =
+            messagesController.javaClass.declaredMethods.firstOrNull { method ->
+                method.name == "markMessageAsRead2" && method.parameterCount == 6
+            } ?: throw IllegalStateException("MessagesController.markMessageAsRead2(...) not found")
+        markMessageAsRead2.isAccessible = true
+        markMessageAsRead2.invoke(messagesController, dialogId, messageId, null, normalizedTtl, 0L, false)
     }
 
     private fun logInfo(message: String) {

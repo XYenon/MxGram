@@ -1,6 +1,7 @@
 package dev.xyenon.mxgram
 
 import java.lang.reflect.Field
+import java.lang.reflect.Method
 
 internal fun getStaticIntFieldValue(
     type: Class<*>,
@@ -84,4 +85,23 @@ internal fun findField(
         }
     }
     throw NoSuchFieldException(type.name + '#' + name)
+}
+
+@Throws(NoSuchMethodException::class)
+internal fun findMethod(
+    type: Class<*>,
+    name: String,
+    vararg parameterTypes: Class<*>,
+): Method {
+    var current: Class<*>? = type
+    while (current != null) {
+        try {
+            val method = current.getDeclaredMethod(name, *parameterTypes)
+            method.isAccessible = true
+            return method
+        } catch (_: NoSuchMethodException) {
+            current = current.superclass
+        }
+    }
+    throw NoSuchMethodException(type.name + '#' + name)
 }

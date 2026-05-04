@@ -10,6 +10,7 @@
 | 🚫 禁用双击 reaction          | 双击消息不再触发快速 reaction                               |
 | 🚫 禁用 greeting sticker 发送 | 点击问候贴纸不再直接发送，仅保留展示                        |
 | 🔓 解除保护内容限制           | 允许在开启“限制保存内容”的会话中截图、复制等                |
+| 💾 允许保存阅后即焚媒体       | 阅后即焚媒体按普通媒体处理：可保存到相册/下载，不会自动清空 |
 | ➕ 消息 `+1` 重发             | 在消息菜单中新增 `+1` 选项，快速转发或按原回复关系重发      |
 | 🆔 头像下显示 ID              | 资料页头像区域下方显示用户 / 群组 / 频道 API ID，长按可复制 |
 
@@ -87,26 +88,31 @@ nix develop -c ./gradlew assembleDebug
 
 ### Hook 点一览
 
-| Hook 位置                             | 目的                       | 策略                             |
-| ------------------------------------- | -------------------------- | -------------------------------- |
-| `ChatActivity.animateToNextChat()`    | 禁用下拉跳转               | 直接短路                         |
-| `ChatPullingDownDrawable` update 方法 | 兜底清除跳转目标           | 清空 nextChat/nextTopic          |
-| `ChatActivity.createView`             | 禁用双击 reaction          | 替换监听，禁用 `hasDoubleTap()`  |
-| `ChatActivity.selectReaction`         | 双保险拦截双击             | `fromDoubleTap` 为 `true` 时拦截 |
-| `ChatGreetingsView.setListener`       | 禁用 greeting sticker 发送 | 清空回调                         |
-| `ChatActivity.fillMessageMenu`        | 插入 `+1` 菜单项           | 在菜单列表追加自定义选项         |
-| `ChatActivity.processSelectedOption`  | 执行 `+1` 转发             | 调用内部 `forwardMessages()`     |
-| `ChatActivity.createMenu`             | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发       |
-| `MessagesController` noforwards 判断  | 解除保护内容限制           | 强制返回 `false`                 |
-| `MessageObject` 构造方法              | 解除保护内容限制           | 清除 `messageOwner.noforwards`   |
-| `ProfileActivity.createView`          | 添加资料页 ID 文本         | 在头像容器追加只读 `TextView`    |
-| `ProfileActivity.updateProfileData`   | 刷新资料页 ID              | 同步用户 / 群组 / 频道 API ID    |
-| `ProfileActivity` 布局 / 展开方法     | 对齐资料页 ID              | 跟随头像区域位置、颜色和透明度   |
+| Hook 位置                               | 目的                       | 策略                                         |
+| --------------------------------------- | -------------------------- | -------------------------------------------- |
+| `ChatActivity.animateToNextChat()`      | 禁用下拉跳转               | 直接短路                                     |
+| `ChatPullingDownDrawable` update 方法   | 兜底清除跳转目标           | 清空 nextChat/nextTopic                      |
+| `ChatActivity.createView`               | 禁用双击 reaction          | 替换监听，禁用 `hasDoubleTap()`              |
+| `ChatActivity.selectReaction`           | 双保险拦截双击             | `fromDoubleTap` 为 `true` 时拦截             |
+| `ChatGreetingsView.setListener`         | 禁用 greeting sticker 发送 | 清空回调                                     |
+| `ChatActivity.fillMessageMenu`          | 插入 `+1` 菜单项           | 在菜单列表追加自定义选项                     |
+| `ChatActivity.processSelectedOption`    | 执行 `+1` 转发             | 调用内部 `forwardMessages()`                 |
+| `ChatActivity.createMenu`               | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发                   |
+| `MessagesController` noforwards 判断    | 解除保护内容限制           | 强制返回 `false`                             |
+| `MessageObject` 构造方法                | 解除保护内容限制           | 清除 `messageOwner.noforwards`               |
+| `MessageObject` 构造方法                | 允许保存阅后即焚媒体       | 清除 `messageOwner.media.ttl_seconds` 等标记 |
+| `ChatActivity.sendSecretMessageRead`    | 阻止自毁媒体打开后排队删除 | 保留已读上报，但不设置本地销毁               |
+| `ChatActivity.sendSecretMediaDelete`    | 阻止一次性媒体关闭即焚     | 直接移除关闭时删除回调                       |
+| `MessagesController.markMessageAsRead*` | 阻止自毁媒体补建删除任务   | 兜底禁用 `createDeleteTask` / TTL 删除任务   |
+| `MessagesController` show-once 删除任务 | 阻止一次性媒体落盘删除     | 直接短路 `create/doDeleteShowOnceTask`       |
+| `ProfileActivity.createView`            | 添加资料页 ID 文本         | 在头像容器追加只读 `TextView`                |
+| `ProfileActivity.updateProfileData`     | 刷新资料页 ID              | 同步用户 / 群组 / 频道 API ID                |
+| `ProfileActivity` 布局 / 展开方法       | 对齐资料页 ID              | 跟随头像区域位置、颜色和透明度               |
 
 主实现文件：`app/src/main/kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt`
 
-> 若 Telegram 升级后 hook 失效，优先检查以下类：
-> `ChatActivity`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`ProfileActivity`、`ChatActivity.selectReaction`
+> 若 Telegram 升级后 hook 失效，优先检查以下类 / 方法：
+> `ChatActivity`、`ChatActivity.sendSecretMessageRead`、`ChatActivity.sendSecretMediaDelete`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`MessagesController.markMessageAsRead2`、`ProfileActivity`、`ChatActivity.selectReaction`
 
 ## 依赖说明
 
