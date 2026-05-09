@@ -334,6 +334,10 @@ class TelegramHooksModule(
         plusOneForwarder.addToMessageMenu(chatActivity, args)
     }
 
+    internal fun markNoForwardsMessage(messageObject: Any) {
+        plusOneForwarder.markNoForwardsMessage(messageObject)
+    }
+
     internal fun attachLongPressToPlusOneMenuItem(chatActivity: Any) {
         plusOneForwarder.attachLongPressToMenuItem(chatActivity)
     }

@@ -10,7 +10,12 @@ internal class PlusOneForwarder(
     private val logError: (String, Throwable) -> Unit,
 ) {
     private val plusOneMenuIndex = WeakHashMap<Any, Int>()
+    private val noForwardsMessages = WeakHashMap<Any, Boolean>()
     private val replyRepeater = PlusOneReplyRepeater(logError)
+
+    fun markNoForwardsMessage(messageObject: Any) {
+        noForwardsMessages[messageObject] = true
+    }
 
     @Suppress("UNCHECKED_CAST")
     fun addToMessageMenu(
@@ -84,7 +89,16 @@ internal class PlusOneForwarder(
     fun forwardSelectedMessageToCurrentChat(chatActivity: Any) {
         try {
             val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return
-            if (replyRepeater.tryRepeatPendingReply(chatActivity, selectedObject)) {
+            val repeatNoForwardsMessage = noForwardsMessages.containsKey(selectedObject)
+            if (replyRepeater.tryRepeatPendingOrForced(
+                    chatActivity,
+                    selectedObject,
+                    repeatNoForwardsMessage,
+                )
+            ) {
+                return
+            }
+            if (repeatNoForwardsMessage) {
                 return
             }
 

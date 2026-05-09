@@ -301,6 +301,9 @@ class ClearMessageNoForwardsHooker : XposedInterface.Hooker {
                             messageNoForwardsField ?: findField(messageOwner.javaClass, "noforwards").also {
                                 messageNoForwardsField = it
                             }
+                        if (noforwardsField.getBoolean(messageOwner)) {
+                            TelegramHooksModule.currentModule().markNoForwardsMessage(messageObject)
+                        }
                         noforwardsField.setBoolean(messageOwner, false)
                     } catch (t: Throwable) {
                         // If Telegram changes the underlying field names, disable the hook to avoid

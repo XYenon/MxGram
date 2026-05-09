@@ -14,24 +14,25 @@ internal class PlusOneReplyRepeater(
         pendingPlusOneReply.set(buildPendingPlusOneReply(chatActivity))
     }
 
-    fun tryRepeatPendingReply(
+    fun tryRepeatPendingOrForced(
         chatActivity: Any,
         selectedObject: Any,
+        forceRepeatWithoutReply: Boolean,
     ): Boolean {
         // Reply case: Telegram doesn't support replying with a forwarded (quoted) message.
         // When user long-presses +1 on a reply, we re-send the content as a normal message and
         // keep the reply target.
         val pending = pendingPlusOneReply.getAndSet(null)
-        if (pending == null || SystemClock.uptimeMillis() - pending.createdAtUptimeMs > PLUS_ONE_REPLY_TTL_MS) {
-            return false
-        }
         return try {
-            val selectedId = selectedObject.javaClass.getMethod("getId").invoke(selectedObject) as Int
-            selectedId == pending.selectedMsgId &&
-                pending.replyToMsg != null &&
-                repeatSelectedMessageAsReply(chatActivity, selectedObject, pending.replyToMsg)
+            if (pending != null && SystemClock.uptimeMillis() - pending.createdAtUptimeMs <= PLUS_ONE_REPLY_TTL_MS) {
+                val selectedId = selectedObject.javaClass.getMethod("getId").invoke(selectedObject) as Int
+                if (selectedId == pending.selectedMsgId && pending.replyToMsg != null) {
+                    return repeatSelectedMessageContent(chatActivity, selectedObject, pending.replyToMsg)
+                }
+            }
+            forceRepeatWithoutReply && repeatSelectedMessageContent(chatActivity, selectedObject, null)
         } catch (_: Throwable) {
-            false
+            forceRepeatWithoutReply && repeatSelectedMessageContent(chatActivity, selectedObject, null)
         }
     }
 
@@ -81,12 +82,12 @@ internal class PlusOneReplyRepeater(
         }
     }
 
-    private fun repeatSelectedMessageAsReply(
+    private fun repeatSelectedMessageContent(
         chatActivity: Any,
         selectedObject: Any?,
         replyToMsg: Any?,
     ): Boolean {
-        if (replyToMsg == null || selectedObject == null) {
+        if (selectedObject == null) {
             return false
         }
         try {
@@ -172,7 +173,7 @@ internal class PlusOneReplyRepeater(
             sendMessage.invoke(sendMessagesHelper, params)
             return true
         } catch (t: Throwable) {
-            logError("Failed to +1 repeat-reply message", t)
+            logError("Failed to +1 repeat message", t)
             return false
         }
     }
