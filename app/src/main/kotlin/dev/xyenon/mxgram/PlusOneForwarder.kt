@@ -90,15 +90,14 @@ internal class PlusOneForwarder(
         try {
             val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return
             val repeatNoForwardsMessage = noForwardsMessages.containsKey(selectedObject)
+            val repeatNoForwardsPeer = isCurrentPeerNoForwards(chatActivity)
+            val shouldRepeatWithoutForwarding = repeatNoForwardsMessage || repeatNoForwardsPeer
             if (replyRepeater.tryRepeatPendingOrForced(
                     chatActivity,
                     selectedObject,
-                    repeatNoForwardsMessage,
+                    shouldRepeatWithoutForwarding,
                 )
             ) {
-                return
-            }
-            if (repeatNoForwardsMessage) {
                 return
             }
 
@@ -115,6 +114,11 @@ internal class PlusOneForwarder(
                 messages.add(selectedObject)
             }
             if (messages.isEmpty()) {
+                return
+            }
+
+            if (shouldRepeatWithoutForwarding) {
+                repeatMessagesFromMyName(chatActivity, messages)
                 return
             }
 
@@ -139,6 +143,51 @@ internal class PlusOneForwarder(
             showFieldPanelForForward.invoke(chatActivity, true, messages)
         } catch (t: Throwable) {
             logError("Failed to +1 forward message", t)
+        }
+    }
+
+    private fun isCurrentPeerNoForwards(chatActivity: Any): Boolean {
+        return try {
+            chatActivity.javaClass.getMethod("isPeerNoForwards").invoke(chatActivity) == true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun repeatMessagesFromMyName(
+        chatActivity: Any,
+        messages: ArrayList<Any>,
+    ) {
+        val dialogId = chatActivity.javaClass.getMethod("getDialogId").invoke(chatActivity) as Long
+        val sendMessagesHelper =
+            chatActivity.javaClass.getMethod("getSendMessagesHelper").invoke(chatActivity) ?: return
+        val processForwardFromMyName =
+            sendMessagesHelper.javaClass.declaredMethods.firstOrNull { method ->
+                method.name == "processForwardFromMyName" && method.parameterCount == 5
+            } ?: return
+        val monoForumPeer =
+            try {
+                chatActivity.javaClass.getMethod("getSendMonoForumPeerId").invoke(chatActivity) as Long
+            } catch (_: NoSuchMethodException) {
+                0L
+            }
+        val suggestionParams =
+            try {
+                chatActivity.javaClass.getMethod("getSendMessageSuggestionParams").invoke(chatActivity)
+            } catch (_: NoSuchMethodException) {
+                null
+            }
+
+        processForwardFromMyName.isAccessible = true
+        for (message in messages) {
+            processForwardFromMyName.invoke(
+                sendMessagesHelper,
+                message,
+                dialogId,
+                0L,
+                monoForumPeer,
+                suggestionParams,
+            )
         }
     }
 
