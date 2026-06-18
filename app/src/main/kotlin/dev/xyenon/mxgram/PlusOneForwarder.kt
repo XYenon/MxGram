@@ -25,12 +25,11 @@ internal class PlusOneForwarder(
         if (!canSendToCurrentConversation(chatActivity)) {
             return
         }
-        if (args == null || args.size < 4) {
+        if (args == null || args.size < 3) {
             return
         }
-        val iconsRaw = args[1]
-        val itemsRaw = args[2]
-        val optionsRaw = args[3]
+        // Hook args end with icons, items, options; arity 5 adds primaryMessage first (12.8.1 / 6916).
+        val (iconsRaw, itemsRaw, optionsRaw) = resolveFillMessageMenuLists(args) ?: return
         if (iconsRaw !is ArrayList<*> || itemsRaw !is ArrayList<*> || optionsRaw !is ArrayList<*>) {
             return
         }
@@ -189,6 +188,19 @@ internal class PlusOneForwarder(
                 suggestionParams,
             )
         }
+    }
+
+    /** arity 4 before 12.8.1 (6916); arity 5 on 12.8.1 (6916) with leading primaryMessage. */
+    private fun resolveFillMessageMenuLists(args: Array<Any?>): Triple<Any?, Any?, Any?>? {
+        val lastThreeAreLists =
+            args.size >= 3 &&
+                args[args.size - 3] is ArrayList<*> &&
+                args[args.size - 2] is ArrayList<*> &&
+                args[args.size - 1] is ArrayList<*>
+        if (!lastThreeAreLists) {
+            return null
+        }
+        return Triple(args[args.size - 3], args[args.size - 2], args[args.size - 1])
     }
 
     private fun onPlusOneLongPressed(

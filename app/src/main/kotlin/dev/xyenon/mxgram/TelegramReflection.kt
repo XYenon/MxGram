@@ -87,6 +87,25 @@ internal fun findField(
     throw NoSuchFieldException(type.name + '#' + name)
 }
 
+/**
+ * Picks a declared method by name when Telegram ships multiple arities across releases.
+ * When several arities match, the highest parameter count wins (e.g. 5 over 4, 19 over 18).
+ * Verified against Telegram Android 12.8.1 (6916).
+ */
+internal fun findDeclaredMethodByNameAndArity(
+    type: Class<*>,
+    name: String,
+    vararg arities: Int,
+): Method? {
+    if (arities.isEmpty()) {
+        return null
+    }
+    val allowed = arities.toSet()
+    return type.declaredMethods
+        .filter { method -> method.name == name && method.parameterCount in allowed }
+        .maxByOrNull { it.parameterCount }
+}
+
 @Throws(NoSuchMethodException::class)
 internal fun findMethod(
     type: Class<*>,

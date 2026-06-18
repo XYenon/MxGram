@@ -100,10 +100,10 @@ internal class PlusOneReplyRepeater(
                 java.lang.Boolean.TRUE == selectedObject.javaClass.getMethod("isAnyKindOfSticker").invoke(selectedObject)
             if (isSticker) {
                 val document = selectedObject.javaClass.getMethod("getDocument").invoke(selectedObject) ?: return false
+                // sendSticker arity 18 before 12.8.1 (6916); arity 19 on 12.8.1 (6916), last param invertMedia.
                 val sendSticker =
-                    sendMessagesHelper.javaClass.declaredMethods.firstOrNull { method ->
-                        method.name == "sendSticker" && method.parameterCount == 18
-                    } ?: return false
+                    findDeclaredMethodByNameAndArity(sendMessagesHelper.javaClass, "sendSticker", 18, 19)
+                        ?: return false
 
                 val monoForumPeer =
                     try {
@@ -118,28 +118,34 @@ internal class PlusOneReplyRepeater(
                         null
                     }
 
+                val invokeArgs =
+                    arrayOf(
+                        document,
+                        null,
+                        dialogId,
+                        replyToMsg,
+                        replyToTopMsg,
+                        null,
+                        null,
+                        null,
+                        true,
+                        0,
+                        0,
+                        false,
+                        null,
+                        null,
+                        0,
+                        0L,
+                        monoForumPeer,
+                        suggestionParams,
+                    )
                 sendSticker.isAccessible = true
-                sendSticker.invoke(
-                    sendMessagesHelper,
-                    document,
-                    null,
-                    dialogId,
-                    replyToMsg,
-                    replyToTopMsg,
-                    null,
-                    null,
-                    null,
-                    true,
-                    0,
-                    0,
-                    false,
-                    null,
-                    null,
-                    0,
-                    0L,
-                    monoForumPeer,
-                    suggestionParams,
-                )
+                if (sendSticker.parameterCount == 19) {
+                    // invertMedia, last argument of sendSticker on 12.8.1 (6916).
+                    sendSticker.invoke(sendMessagesHelper, *invokeArgs, false)
+                } else {
+                    sendSticker.invoke(sendMessagesHelper, *invokeArgs)
+                }
                 return true
             }
 

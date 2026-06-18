@@ -184,10 +184,11 @@ class TelegramHooksModule(
 
     @Throws(Exception::class)
     private fun hookPlusOneForward(chatActivityClass: Class<*>) {
+        // fillMessageMenu arity 4: icons, items, options (before 12.8.1 / 6916).
+        // fillMessageMenu arity 5: primaryMessage, icons, items, options (12.8.1 / 6916).
         val fillMessageMenu =
-            chatActivityClass.declaredMethods.firstOrNull { method ->
-                method.name == "fillMessageMenu" && method.parameterCount == 4
-            } ?: throw IllegalStateException("ChatActivity.fillMessageMenu(...) not found")
+            findDeclaredMethodByNameAndArity(chatActivityClass, "fillMessageMenu", 4, 5)
+                ?: throw IllegalStateException("ChatActivity.fillMessageMenu(...) not found")
         fillMessageMenu.isAccessible = true
         hook(fillMessageMenu, FillMessageMenuHooker::class.java)
 
