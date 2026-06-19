@@ -10,8 +10,8 @@ android {
         applicationId = "dev.xyenon.mxgram"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.0.5"
+        versionCode = 7
+        versionName = "2.0.0"
     }
 
     buildTypes {
@@ -33,5 +33,5 @@ android {
 }
 
 dependencies {
-    compileOnly("io.github.libxposed:api:-100-ge2588ee-22@aar")
+    compileOnly("io.github.libxposed:api:101.0.1")
 }

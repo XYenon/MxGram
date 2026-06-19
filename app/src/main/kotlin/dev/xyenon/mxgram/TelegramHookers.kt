@@ -1,260 +1,169 @@
 package dev.xyenon.mxgram
 
 import io.github.libxposed.api.XposedInterface
-import io.github.libxposed.api.annotations.AfterInvocation
-import io.github.libxposed.api.annotations.BeforeInvocation
-import io.github.libxposed.api.annotations.XposedHooker
 import java.lang.reflect.Field
 
-@XposedHooker
 class BlockAnimateToNextChatHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            callback.returnAndSkip(null)
-        }
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = null
 }
 
-@XposedHooker
 class CreateViewHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val module = TelegramHooksModule.currentModule()
-            val chatActivity = callback.thisObject ?: return
-            module.disableDoubleTapReaction(chatActivity, chatActivity.javaClass.classLoader)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val chatActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().disableDoubleTapReaction(chatActivity, chatActivity.javaClass.classLoader)
+        return result
     }
 }
 
-@XposedHooker
 class SelectReactionHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            val args = callback.args
-            if (args.size > 7 && java.lang.Boolean.TRUE == args[7]) {
-                callback.returnAndSkip(null)
-            }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val args = chain.args
+        if (args.size > 7 && java.lang.Boolean.TRUE == args[7]) {
+            return null
         }
+        return chain.proceed()
     }
 }
 
-@XposedHooker
 class DisableGreetingStickerHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        @Throws(Throwable::class)
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            val chatGreetingsView = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().clearGreetingStickerListener(chatGreetingsView)
-            callback.returnAndSkip(null)
-        }
+    @Throws(Throwable::class)
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val chatGreetingsView = chain.thisObject ?: return chain.proceed()
+        TelegramHooksModule.currentModule().clearGreetingStickerListener(chatGreetingsView)
+        return null
     }
 }
 
-@XposedHooker
 class PullingDownTargetHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        @Throws(Throwable::class)
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val pullingDownDrawable = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().neutralizePullingDownTarget(pullingDownDrawable)
-        }
+    @Throws(Throwable::class)
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val pullingDownDrawable = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().neutralizePullingDownTarget(pullingDownDrawable)
+        return result
     }
 }
 
-@XposedHooker
 class SecretMessageReadHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            val chatActivity = callback.thisObject ?: return
-            val args = callback.args
-            if (args.size != 2) {
-                return
-            }
-            val messageObject = args[0] ?: return
-            val readNow = args[1] as? Boolean ?: return
-            try {
-                val replacement =
-                    TelegramHooksModule.currentModule().buildSelfDestructMediaReadAction(
-                        chatActivity,
-                        messageObject,
-                        readNow,
-                    )
-                callback.returnAndSkip(replacement)
-            } catch (t: Throwable) {
-                TelegramHooksModule.currentModule().logError(
-                    "Failed to override Telegram self-destruct media read flow",
-                    t,
-                )
-            }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val chatActivity = chain.thisObject ?: return chain.proceed()
+        val args = chain.args
+        if (args.size != 2) {
+            return chain.proceed()
+        }
+        val messageObject = args[0] ?: return chain.proceed()
+        val readNow = args[1] as? Boolean ?: return chain.proceed()
+        return try {
+            TelegramHooksModule.currentModule().buildSelfDestructMediaReadAction(
+                chatActivity,
+                messageObject,
+                readNow,
+            )
+        } catch (t: Throwable) {
+            TelegramHooksModule.currentModule().logError(
+                "Failed to override Telegram self-destruct media read flow",
+                t,
+            )
+            chain.proceed()
         }
     }
 }
 
-@XposedHooker
 class SecretMediaDeleteHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            callback.returnAndSkip(null)
-        }
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = null
 }
 
-@XposedHooker
 class PreventDeleteTaskOnContentReadHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            TelegramHooksModule.currentModule().disarmSelfDestructDeleteTask(callback.args)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        TelegramHooksModule.currentModule().disarmSelfDestructDeleteTask(chain.args.toTypedArray())
+        return chain.proceed()
     }
 }
 
-@XposedHooker
 class PreventDeleteTaskOnSecretChatReadHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            TelegramHooksModule.currentModule().disarmSecretChatDeleteTask(callback.args)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        TelegramHooksModule.currentModule().disarmSecretChatDeleteTask(chain.args.toTypedArray())
+        return chain.proceed()
     }
 }
 
-@XposedHooker
 class BlockCreateDeleteShowOnceTaskHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            callback.returnAndSkip(0L)
-        }
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = 0L
 }
 
-@XposedHooker
 class BlockDoDeleteShowOnceTaskHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            callback.returnAndSkip(null)
-        }
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = null
 }
 
-@XposedHooker
 class FillMessageMenuHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val module = TelegramHooksModule.currentModule()
-            val chatActivity = callback.thisObject ?: return
-            module.addPlusOneToMessageMenu(chatActivity, callback.args)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val chatActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().addPlusOneToMessageMenu(chatActivity, chain.args.toTypedArray())
+        return result
     }
 }
 
-@XposedHooker
 class CreateMenuHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val result = callback.result
-            if (result !is Boolean || result != true) {
-                return
-            }
-            val chatActivity = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().attachLongPressToPlusOneMenuItem(chatActivity)
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (result !is Boolean || result != true) {
+            return result
         }
+        val chatActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().attachLongPressToPlusOneMenuItem(chatActivity)
+        return result
     }
 }
 
-@XposedHooker
 class ProcessSelectedOptionHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            val args = callback.args
-            if (args.isEmpty() || args[0] !is Int) {
-                return
-            }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val args = chain.args
+        if (args.isNotEmpty() && args[0] is Int) {
             val option = args[0] as Int
-            if (option != OPTION_PLUS_ONE) {
-                return
+            if (option == OPTION_PLUS_ONE) {
+                val chatActivity = chain.thisObject
+                if (chatActivity != null) {
+                    TelegramHooksModule.currentModule().forwardSelectedMessageToCurrentChat(chatActivity)
+                }
             }
-            val chatActivity = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().forwardSelectedMessageToCurrentChat(chatActivity)
-            // Do not skip: let Telegram close the menu & clear internal selection state.
         }
+        return chain.proceed()
     }
 }
 
-@XposedHooker
 class ProfileCreateViewHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val profileActivity = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().installProfileIdDisplay(profileActivity)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val profileActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().installProfileIdDisplay(profileActivity)
+        return result
     }
 }
 
-@XposedHooker
 class ProfileUpdateDataHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val profileActivity = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().updateProfileIdDisplay(profileActivity)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val profileActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().updateProfileIdDisplay(profileActivity)
+        return result
     }
 }
 
-@XposedHooker
 class ProfileLayoutHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            val profileActivity = callback.thisObject ?: return
-            TelegramHooksModule.currentModule().syncProfileIdDisplay(profileActivity)
-        }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val profileActivity = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().syncProfileIdDisplay(profileActivity)
+        return result
     }
 }
 
-@XposedHooker
 class NoForwardsBypassHooker : XposedInterface.Hooker {
-    companion object {
-        @JvmStatic
-        @BeforeInvocation
-        fun before(callback: XposedInterface.BeforeHookCallback) {
-            callback.returnAndSkip(false)
-        }
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = false
 }
 
-@XposedHooker
 class ClearMessageNoForwardsHooker : XposedInterface.Hooker {
     companion object {
         @Volatile
@@ -280,88 +189,84 @@ class ClearMessageNoForwardsHooker : XposedInterface.Hooker {
 
         @Volatile
         private var messageMediaTtlSecondsField: Field? = null
+    }
 
-        @JvmStatic
-        @AfterInvocation
-        fun after(callback: XposedInterface.AfterHookCallback) {
-            if (noForwardsDisabled && selfDestructDisabled) {
-                return
-            }
-            val messageObject = callback.thisObject ?: return
-            try {
-                val ownerField =
-                    messageOwnerField ?: findField(messageObject.javaClass, "messageOwner").also {
-                        messageOwnerField = it
-                    }
-                val messageOwner = ownerField.get(messageObject) ?: return
-
-                if (!noForwardsDisabled) {
-                    try {
-                        val noforwardsField =
-                            messageNoForwardsField ?: findField(messageOwner.javaClass, "noforwards").also {
-                                messageNoForwardsField = it
-                            }
-                        if (noforwardsField.getBoolean(messageOwner)) {
-                            TelegramHooksModule.currentModule().markNoForwardsMessage(messageObject)
-                        }
-                        noforwardsField.setBoolean(messageOwner, false)
-                    } catch (t: Throwable) {
-                        // If Telegram changes the underlying field names, disable the hook to avoid
-                        // spamming logs during scrolling.
-                        noForwardsDisabled = true
-                        TelegramHooksModule.currentModule().logError(
-                            "Failed to bypass Telegram noforwards message restriction",
-                            t,
-                        )
-                    }
-                }
-
-                if (!selfDestructDisabled) {
-                    try {
-                        // Treat self-destruct media (ttl_seconds != 0) as regular media so the normal
-                        // save/share UI becomes available.
-                        val mediaField =
-                            messageMediaField ?: findField(messageOwner.javaClass, "media").also {
-                                messageMediaField = it
-                            }
-                        val media = mediaField.get(messageOwner) ?: return
-                        val ttlSecondsField =
-                            messageMediaTtlSecondsField ?: findField(media.javaClass, "ttl_seconds").also {
-                                messageMediaTtlSecondsField = it
-                            }
-                        val ttlSeconds = ttlSecondsField.getInt(media)
-                        if (ttlSeconds != 0) {
-                            ttlSecondsField.setInt(media, 0)
-
-                            val ttlField =
-                                messageTtlField ?: findField(messageOwner.javaClass, "ttl").also {
-                                    messageTtlField = it
-                                }
-                            if (ttlField.getInt(messageOwner) != 0) {
-                                ttlField.setInt(messageOwner, 0)
-                            }
-
-                            val destroyTimeField =
-                                messageDestroyTimeField ?: findField(messageOwner.javaClass, "destroyTime").also {
-                                    messageDestroyTimeField = it
-                                }
-                            if (destroyTimeField.getInt(messageOwner) != 0) {
-                                destroyTimeField.setInt(messageOwner, 0)
-                            }
-                        }
-                    } catch (t: Throwable) {
-                        selfDestructDisabled = true
-                        TelegramHooksModule.currentModule().logError(
-                            "Failed to normalize Telegram self-destruct media flags",
-                            t,
-                        )
-                    }
-                }
-            } catch (t: Throwable) {
-                noForwardsDisabled = true
-                selfDestructDisabled = true
-                TelegramHooksModule.currentModule().logError("Failed to patch Telegram message flags", t)
-            }
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        if (noForwardsDisabled && selfDestructDisabled) {
+            return result
         }
+        val messageObject = chain.thisObject ?: return result
+        try {
+            val ownerField =
+                messageOwnerField ?: findField(messageObject.javaClass, "messageOwner").also {
+                    messageOwnerField = it
+                }
+            val messageOwner = ownerField.get(messageObject) ?: return result
+
+            if (!noForwardsDisabled) {
+                try {
+                    val noforwardsField =
+                        messageNoForwardsField ?: findField(messageOwner.javaClass, "noforwards").also {
+                            messageNoForwardsField = it
+                        }
+                    if (noforwardsField.getBoolean(messageOwner)) {
+                        TelegramHooksModule.currentModule().markNoForwardsMessage(messageObject)
+                    }
+                    noforwardsField.setBoolean(messageOwner, false)
+                } catch (t: Throwable) {
+                    noForwardsDisabled = true
+                    TelegramHooksModule.currentModule().logError(
+                        "Failed to bypass Telegram noforwards message restriction",
+                        t,
+                    )
+                }
+            }
+
+            if (!selfDestructDisabled) {
+                try {
+                    val mediaField =
+                        messageMediaField ?: findField(messageOwner.javaClass, "media").also {
+                            messageMediaField = it
+                        }
+                    val media = mediaField.get(messageOwner) ?: return result
+                    val ttlSecondsField =
+                        messageMediaTtlSecondsField ?: findField(media.javaClass, "ttl_seconds").also {
+                            messageMediaTtlSecondsField = it
+                        }
+                    val ttlSeconds = ttlSecondsField.getInt(media)
+                    if (ttlSeconds != 0) {
+                        ttlSecondsField.setInt(media, 0)
+
+                        val ttlField =
+                            messageTtlField ?: findField(messageOwner.javaClass, "ttl").also {
+                                messageTtlField = it
+                            }
+                        if (ttlField.getInt(messageOwner) != 0) {
+                            ttlField.setInt(messageOwner, 0)
+                        }
+
+                        val destroyTimeField =
+                            messageDestroyTimeField ?: findField(messageOwner.javaClass, "destroyTime").also {
+                                messageDestroyTimeField = it
+                            }
+                        if (destroyTimeField.getInt(messageOwner) != 0) {
+                            destroyTimeField.setInt(messageOwner, 0)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    selfDestructDisabled = true
+                    TelegramHooksModule.currentModule().logError(
+                        "Failed to normalize Telegram self-destruct media flags",
+                        t,
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            noForwardsDisabled = true
+            selfDestructDisabled = true
+            TelegramHooksModule.currentModule().logError("Failed to patch Telegram message flags", t)
+        }
+        return result
     }
 }

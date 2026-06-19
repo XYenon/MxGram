@@ -1,6 +1,6 @@
 # MxGram
 
-> 一个基于 LSPosed modern API 100 的 Telegram Android 模块。
+> 面向官方 Telegram 的 LSPosed 模块，用于调整部分交互并扩展消息与资料页的常用能力。
 
 ## 功能
 
@@ -34,7 +34,7 @@
 
 ## 技术栈
 
-- **LSPosed** — modern API 100
+- **LSPosed** — modern API 101
 - **Kotlin** — AGP 9 内置支持，目标 Java 17
 - **Nix** — Flake + direnv 提供可重现的开发环境
 
@@ -116,13 +116,11 @@ nix develop -c ./gradlew assembleDebug
 
 ## 依赖说明
 
-Gradle 通过 JitPack 引入 API 100 对应工件：
+Gradle 通过 Maven Central 引入 API 101 对应工件：
 
 ```text
-io.github.libxposed:api:-100-ge2588ee-22@aar
+io.github.libxposed:api:101.0.1
 ```
-
-使用 `@aar` 是因为该 JitPack 工件的 POM 元数据版本不规范，按普通 Maven 坐标解析会触发版本不一致错误。
 
 ## 开发环境
 
@@ -151,8 +149,8 @@ nix flake check  # CI 友好检查
 
 ## Xposed 元数据
 
-- `minApiVersion=100`
-- `targetApiVersion=100`
+- `minApiVersion=101`
+- `targetApiVersion=101`
 - `staticScope=true`
 
 入口文件：`app/src/main/resources/META-INF/xposed/`

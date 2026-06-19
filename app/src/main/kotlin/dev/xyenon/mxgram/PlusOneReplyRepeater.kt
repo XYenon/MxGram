@@ -104,7 +104,6 @@ internal class PlusOneReplyRepeater(
             return null
         }
     }
-
 }
 
 private data class PendingPlusOneReply(

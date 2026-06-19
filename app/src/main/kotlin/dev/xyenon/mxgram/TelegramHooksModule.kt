@@ -1,25 +1,23 @@
 package dev.xyenon.mxgram
 
 import android.content.Context
-import io.github.libxposed.api.XposedInterface
+import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
-class TelegramHooksModule(
-    base: XposedInterface,
-    param: XposedModuleInterface.ModuleLoadedParam,
-) : XposedModule(base, param) {
+class TelegramHooksModule : XposedModule() {
     private val hooksInstalled = AtomicBoolean(false)
-    private val processName = param.processName
+    private var processName: String = ""
     private val plusOneForwarder = PlusOneForwarder { message, throwable -> logError(message, throwable) }
     private val profileIdDisplay = ProfileIdDisplay { message, throwable -> logError(message, throwable) }
 
-    init {
+    override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         instance = this
+        processName = param.processName
     }
 
-    override fun onPackageLoaded(param: XposedModuleInterface.PackageLoadedParam) {
+    override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
         if (param.packageName != TARGET_PACKAGE) {
             return
         }
@@ -28,9 +26,7 @@ class TelegramHooksModule(
         }
 
         try {
-            val classLoader = param.classLoader ?: param.defaultClassLoader
-            checkNotNull(classLoader) { "Telegram classloader is null" }
-            installHooks(classLoader)
+            installHooks(param.classLoader)
             logInfo("Telegram hooks installed in $processName")
         } catch (t: Throwable) {
             hooksInstalled.set(false)
@@ -78,7 +74,7 @@ class TelegramHooksModule(
                     continue
                 }
                 method.isAccessible = true
-                hook(method, NoForwardsBypassHooker::class.java)
+                hook(method).intercept(NoForwardsBypassHooker())
                 hooked += 1
             }
             check(hooked > 0) { "MessagesController noforwards methods not found" }
@@ -98,7 +94,7 @@ class TelegramHooksModule(
                     continue
                 }
                 constructor.isAccessible = true
-                hook(constructor, ClearMessageNoForwardsHooker::class.java)
+                hook(constructor).intercept(ClearMessageNoForwardsHooker())
                 hooked += 1
             }
             check(hooked > 0) { "MessageObject constructors taking TLRPC.Message not found" }
@@ -117,42 +113,42 @@ class TelegramHooksModule(
                     method.name == "sendSecretMessageRead" && method.parameterCount == 2
                 } ?: throw IllegalStateException("ChatActivity.sendSecretMessageRead(...) not found")
             sendSecretMessageRead.isAccessible = true
-            hook(sendSecretMessageRead, SecretMessageReadHooker::class.java)
+            hook(sendSecretMessageRead).intercept(SecretMessageReadHooker())
 
             val sendSecretMediaDelete =
                 chatActivityClass.declaredMethods.firstOrNull { method ->
                     method.name == "sendSecretMediaDelete" && method.parameterCount == 1
                 } ?: throw IllegalStateException("ChatActivity.sendSecretMediaDelete(...) not found")
             sendSecretMediaDelete.isAccessible = true
-            hook(sendSecretMediaDelete, SecretMediaDeleteHooker::class.java)
+            hook(sendSecretMediaDelete).intercept(SecretMediaDeleteHooker())
 
             val markMessageAsRead2 =
                 messagesControllerClass.declaredMethods.firstOrNull { method ->
                     method.name == "markMessageAsRead2" && method.parameterCount == 6
                 } ?: throw IllegalStateException("MessagesController.markMessageAsRead2(...) not found")
             markMessageAsRead2.isAccessible = true
-            hook(markMessageAsRead2, PreventDeleteTaskOnContentReadHooker::class.java)
+            hook(markMessageAsRead2).intercept(PreventDeleteTaskOnContentReadHooker())
 
             val markMessageAsRead =
                 messagesControllerClass.declaredMethods.firstOrNull { method ->
                     method.name == "markMessageAsRead" && method.parameterCount == 3
                 } ?: throw IllegalStateException("MessagesController.markMessageAsRead(...) not found")
             markMessageAsRead.isAccessible = true
-            hook(markMessageAsRead, PreventDeleteTaskOnSecretChatReadHooker::class.java)
+            hook(markMessageAsRead).intercept(PreventDeleteTaskOnSecretChatReadHooker())
 
             val createDeleteShowOnceTask =
                 messagesControllerClass.declaredMethods.firstOrNull { method ->
                     method.name == "createDeleteShowOnceTask" && method.parameterCount == 2
                 } ?: throw IllegalStateException("MessagesController.createDeleteShowOnceTask(...) not found")
             createDeleteShowOnceTask.isAccessible = true
-            hook(createDeleteShowOnceTask, BlockCreateDeleteShowOnceTaskHooker::class.java)
+            hook(createDeleteShowOnceTask).intercept(BlockCreateDeleteShowOnceTaskHooker())
 
             val doDeleteShowOnceTask =
                 messagesControllerClass.declaredMethods.firstOrNull { method ->
                     method.name == "doDeleteShowOnceTask" && method.parameterCount == 3
                 } ?: throw IllegalStateException("MessagesController.doDeleteShowOnceTask(...) not found")
             doDeleteShowOnceTask.isAccessible = true
-            hook(doDeleteShowOnceTask, BlockDoDeleteShowOnceTaskHooker::class.java)
+            hook(doDeleteShowOnceTask).intercept(BlockDoDeleteShowOnceTaskHooker())
         } catch (t: Throwable) {
             logError("Failed to install self-destruct media protection hook", t)
         }
@@ -162,21 +158,21 @@ class TelegramHooksModule(
         try {
             val createView = profileActivityClass.getDeclaredMethod("createView", Context::class.java)
             createView.isAccessible = true
-            hook(createView, ProfileCreateViewHooker::class.java)
+            hook(createView).intercept(ProfileCreateViewHooker())
 
             val updateProfileData =
                 profileActivityClass.getDeclaredMethod("updateProfileData", java.lang.Boolean.TYPE)
             updateProfileData.isAccessible = true
-            hook(updateProfileData, ProfileUpdateDataHooker::class.java)
+            hook(updateProfileData).intercept(ProfileUpdateDataHooker())
 
             val needLayout = profileActivityClass.getDeclaredMethod("needLayout", java.lang.Boolean.TYPE)
             needLayout.isAccessible = true
-            hook(needLayout, ProfileLayoutHooker::class.java)
+            hook(needLayout).intercept(ProfileLayoutHooker())
 
             val setAvatarExpandProgress =
                 profileActivityClass.getDeclaredMethod("setAvatarExpandProgress", java.lang.Float.TYPE)
             setAvatarExpandProgress.isAccessible = true
-            hook(setAvatarExpandProgress, ProfileLayoutHooker::class.java)
+            hook(setAvatarExpandProgress).intercept(ProfileLayoutHooker())
         } catch (t: Throwable) {
             logError("Failed to install profile ID display hook", t)
         }
@@ -190,33 +186,33 @@ class TelegramHooksModule(
             findDeclaredMethodByNameAndArity(chatActivityClass, "fillMessageMenu", 4, 5)
                 ?: throw IllegalStateException("ChatActivity.fillMessageMenu(...) not found")
         fillMessageMenu.isAccessible = true
-        hook(fillMessageMenu, FillMessageMenuHooker::class.java)
+        hook(fillMessageMenu).intercept(FillMessageMenuHooker())
 
         val processSelectedOption =
             chatActivityClass.getDeclaredMethod("processSelectedOption", java.lang.Integer.TYPE)
         processSelectedOption.isAccessible = true
-        hook(processSelectedOption, ProcessSelectedOptionHooker::class.java)
+        hook(processSelectedOption).intercept(ProcessSelectedOptionHooker())
 
         val createMenu =
             chatActivityClass.declaredMethods.firstOrNull { method ->
                 method.name == "createMenu" && method.parameterCount == 8
             } ?: throw IllegalStateException("ChatActivity.createMenu(...) not found")
         createMenu.isAccessible = true
-        hook(createMenu, CreateMenuHooker::class.java)
+        hook(createMenu).intercept(CreateMenuHooker())
     }
 
     @Throws(NoSuchMethodException::class)
     private fun hookAnimateToNextChat(chatActivityClass: Class<*>) {
         val method = chatActivityClass.getDeclaredMethod("animateToNextChat")
         method.isAccessible = true
-        hook(method, BlockAnimateToNextChatHooker::class.java)
+        hook(method).intercept(BlockAnimateToNextChatHooker())
     }
 
     @Throws(NoSuchMethodException::class)
     private fun hookCreateView(chatActivityClass: Class<*>) {
         val method = chatActivityClass.getDeclaredMethod("createView", Context::class.java)
         method.isAccessible = true
-        hook(method, CreateViewHooker::class.java)
+        hook(method).intercept(CreateViewHooker())
     }
 
     @Throws(NoSuchMethodException::class)
@@ -228,7 +224,7 @@ class TelegramHooksModule(
 
         val method = chatGreetingsViewClass.getDeclaredMethod("setListener", listenerInterface)
         method.isAccessible = true
-        hook(method, DisableGreetingStickerHooker::class.java)
+        hook(method).intercept(DisableGreetingStickerHooker())
     }
 
     private fun hookSelectReaction(chatActivityClass: Class<*>) {
@@ -237,7 +233,7 @@ class TelegramHooksModule(
                 continue
             }
             method.isAccessible = true
-            hook(method, SelectReactionHooker::class.java)
+            hook(method).intercept(SelectReactionHooker())
             return
         }
         throw IllegalStateException("ChatActivity.selectReaction(...) not found")
@@ -252,7 +248,7 @@ class TelegramHooksModule(
                 continue
             }
             method.isAccessible = true
-            hook(method, PullingDownTargetHooker::class.java)
+            hook(method).intercept(PullingDownTargetHooker())
         }
     }
 
@@ -395,14 +391,14 @@ class TelegramHooksModule(
     }
 
     private fun logInfo(message: String) {
-        log("$TAG: $message")
+        log(Log.INFO, TAG, message)
     }
 
     internal fun logError(
         message: String,
         throwable: Throwable,
     ) {
-        log("$TAG: $message", throwable)
+        log(Log.ERROR, TAG, message, throwable)
     }
 
     companion object {

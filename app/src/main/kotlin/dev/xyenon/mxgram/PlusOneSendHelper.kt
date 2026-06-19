@@ -18,8 +18,8 @@ internal fun messageIdentity(messageObject: Any): String? =
  * [TLRPC.Chat] / [TLRPC.UserFull] fields. Does not call hooked [MessagesController] helpers.
  * Verified against Telegram Android 12.8.1 (6916).
  */
-internal fun isPeerNoForwardsFromRawPeerState(chatActivity: Any): Boolean {
-    return try {
+internal fun isPeerNoForwardsFromRawPeerState(chatActivity: Any): Boolean =
+    try {
         val chatActivityClass = chatActivity.javaClass
         val currentChat =
             try {
@@ -41,9 +41,11 @@ internal fun isPeerNoForwardsFromRawPeerState(chatActivity: Any): Boolean {
     } catch (_: Throwable) {
         false
     }
-}
 
-private fun isChatNoForwardsFromRawChat(chatActivity: Any, chat: Any): Boolean {
+private fun isChatNoForwardsFromRawChat(
+    chatActivity: Any,
+    chat: Any,
+): Boolean {
     val migratedToRef =
         try {
             findField(chat.javaClass, "migrated_to").get(chat)
@@ -79,7 +81,10 @@ private fun isUserNoForwardsFromRawUserFull(userFull: Any?): Boolean {
     return peerEnabled || myEnabled
 }
 
-private fun readBooleanField(instance: Any, name: String): Boolean =
+private fun readBooleanField(
+    instance: Any,
+    name: String,
+): Boolean =
     try {
         findField(instance.javaClass, name).getBoolean(instance)
     } catch (_: Throwable) {
@@ -90,8 +95,7 @@ private fun readBooleanField(instance: Any, name: String): Boolean =
 internal fun shouldRepeatPlusOneWithoutForwardHeader(
     chatActivity: Any,
     messageObject: Any,
-): Boolean =
-    isPeerNoForwardsFromRawPeerState(chatActivity) || isMessageNoForwardsForPlusOne(messageObject)
+): Boolean = isPeerNoForwardsFromRawPeerState(chatActivity) || isMessageNoForwardsForPlusOne(messageObject)
 
 internal fun isMessageNoForwardsForPlusOne(messageObject: Any): Boolean {
     if (PlusOneNoForwardsTracker.contains(messageObject)) {
