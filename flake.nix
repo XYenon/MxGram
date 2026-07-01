@@ -74,6 +74,8 @@
                 androidSdkRoot = "${androidSdk}/libexec/android-sdk";
 
                 aapt2FromMavenOverride = "${androidSdkRoot}/build-tools/${android.buildToolsVersion}/aapt2";
+
+                python3WithLottie = pkgs.python3.withPackages (ps: with ps; [ lottie ]);
               in
               {
                 treefmt = import ./treefmt.nix;
@@ -87,7 +89,10 @@
                     androidSdk
                     config.treefmt.build.wrapper
                     git
+                    imagemagick
                     jdk
+                    librsvg
+                    python3WithLottie
                     unzip
                     which
                     zip

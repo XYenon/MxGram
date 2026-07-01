@@ -10,8 +10,8 @@ android {
         applicationId = "dev.xyenon.mxgram"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "2.0.0"
+        versionCode = 8
+        versionName = "2.1.0"
     }
 
     buildTypes {
@@ -30,8 +30,14 @@ android {
             merges += "META-INF/xposed/*"
         }
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
     compileOnly("io.github.libxposed:api:102.0.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

@@ -10,6 +10,10 @@ class TelegramHooksModule : XposedModule() {
     private val hooksInstalled = AtomicBoolean(false)
     private var processName: String = ""
     private val plusOneForwarder = PlusOneForwarder { message, throwable -> logError(message, throwable) }
+    private val stickerDownloadMenu =
+        StickerDownloadMenu(
+            StickerSaver { message, throwable -> logError(message, throwable) },
+        ) { message, throwable -> logError(message, throwable) }
     private val profileIdDisplay = ProfileIdDisplay { message, throwable -> logError(message, throwable) }
 
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
@@ -56,6 +60,7 @@ class TelegramHooksModule : XposedModule() {
         hookSelectReaction(chatActivityClass)
         hookPullingDownTargets(pullingDownDrawableClass)
         hookPlusOneForward(chatActivityClass)
+        hookStickerDownload(classLoader)
         hookProfileIdDisplay(profileActivityClass)
     }
 
@@ -175,6 +180,18 @@ class TelegramHooksModule : XposedModule() {
             hook(setAvatarExpandProgress).intercept(ProfileLayoutHooker())
         } catch (t: Throwable) {
             logError("Failed to install profile ID display hook", t)
+        }
+    }
+
+    private fun hookStickerDownload(classLoader: ClassLoader) {
+        try {
+            val contentPreviewViewerClass =
+                Class.forName("org.telegram.ui.ContentPreviewViewer", false, classLoader)
+            val getInstance = contentPreviewViewerClass.getDeclaredMethod("getInstance")
+            getInstance.isAccessible = true
+            hook(getInstance).intercept(ContentPreviewGetInstanceHooker())
+        } catch (t: Throwable) {
+            logError("Failed to install sticker preview menu hook", t)
         }
     }
 
@@ -341,6 +358,22 @@ class TelegramHooksModule : XposedModule() {
 
     internal fun forwardSelectedMessageToCurrentChat(chatActivity: Any) {
         plusOneForwarder.forwardSelectedMessageToCurrentChat(chatActivity)
+    }
+
+    internal fun addSaveStickerToMessageMenu(
+        chatActivity: Any,
+        args: Array<Any?>?,
+    ) {
+        stickerDownloadMenu.addToMessageMenu(chatActivity, args)
+    }
+
+    internal fun handleSaveStickerOption(
+        chatActivity: Any,
+        option: Int,
+    ): Boolean = stickerDownloadMenu.handleSelectedOption(chatActivity, option)
+
+    internal fun wrapContentPreviewStickerMenu(contentPreviewViewer: Any) {
+        stickerDownloadMenu.wrapContentPreviewViewer(contentPreviewViewer)
     }
 
     internal fun installProfileIdDisplay(profileActivity: Any) {

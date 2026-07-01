@@ -100,7 +100,9 @@ class FillMessageMenuHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
         val chatActivity = chain.thisObject ?: return result
-        TelegramHooksModule.currentModule().addPlusOneToMessageMenu(chatActivity, chain.args.toTypedArray())
+        val args = chain.args.toTypedArray()
+        TelegramHooksModule.currentModule().addSaveStickerToMessageMenu(chatActivity, args)
+        TelegramHooksModule.currentModule().addPlusOneToMessageMenu(chatActivity, args)
         return result
     }
 }
@@ -122,14 +124,25 @@ class ProcessSelectedOptionHooker : XposedInterface.Hooker {
         val args = chain.args
         if (args.isNotEmpty() && args[0] is Int) {
             val option = args[0] as Int
-            if (option == OPTION_PLUS_ONE) {
-                val chatActivity = chain.thisObject
-                if (chatActivity != null) {
-                    TelegramHooksModule.currentModule().forwardSelectedMessageToCurrentChat(chatActivity)
+            val chatActivity = chain.thisObject
+            if (chatActivity != null && option == OPTION_SAVE_STICKER) {
+                if (TelegramHooksModule.currentModule().handleSaveStickerOption(chatActivity, option)) {
+                    return null
                 }
+            }
+            if (option == OPTION_PLUS_ONE && chatActivity != null) {
+                TelegramHooksModule.currentModule().forwardSelectedMessageToCurrentChat(chatActivity)
             }
         }
         return chain.proceed()
+    }
+}
+
+class ContentPreviewGetInstanceHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val viewer = chain.proceed() ?: return null
+        TelegramHooksModule.currentModule().wrapContentPreviewStickerMenu(viewer)
+        return viewer
     }
 }
 
