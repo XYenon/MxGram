@@ -2,8 +2,8 @@ package dev.xyenon.mxgram
 
 import android.app.Activity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
-import java.util.concurrent.atomic.AtomicBoolean
 
 internal const val OPTION_SAVE_STICKER = 0x4D584702 // "MXG\u0002"
 private const val CONTENT_TYPE_STICKER = 0
@@ -12,7 +12,8 @@ internal class StickerDownloadMenu(
     private val stickerSaver: StickerSaver,
     private val logError: (String, Throwable) -> Unit,
 ) {
-    private val previewRunnableWrapped = AtomicBoolean(false)
+    @Volatile
+    private var previewTarget: PreviewTarget? = null
 
     @Suppress("UNCHECKED_CAST")
     fun addToMessageMenu(
@@ -84,24 +85,20 @@ internal class StickerDownloadMenu(
         return true
     }
 
-    fun wrapContentPreviewViewer(viewer: Any) {
-        if (!previewRunnableWrapped.compareAndSet(false, true)) {
+    fun registerContentPreviewViewer(viewer: Any): Runnable {
+        val runnable =
+            findField(viewer.javaClass, "showSheetRunnable").get(viewer) as? Runnable
+                ?: throw IllegalStateException("ContentPreviewViewer.showSheetRunnable is not a Runnable")
+        previewTarget = PreviewTarget(runnable, viewer)
+        return runnable
+    }
+
+    fun patchContentPreviewStickerMenu(runnable: Any) {
+        val target = previewTarget ?: return
+        if (runnable !== target.runnable) {
             return
         }
-        try {
-            val field = findField(viewer.javaClass, "showSheetRunnable")
-            val original = field.get(viewer) as? Runnable ?: return
-            field.set(
-                viewer,
-                Runnable {
-                    original.run()
-                    patchStickerPreviewMenu(viewer)
-                },
-            )
-        } catch (t: Throwable) {
-            previewRunnableWrapped.set(false)
-            logError("Failed to wrap ContentPreviewViewer sticker menu", t)
-        }
+        patchStickerPreviewMenu(target.viewer)
     }
 
     private fun patchStickerPreviewMenu(viewer: Any) {
@@ -136,7 +133,7 @@ internal class StickerDownloadMenu(
                 actionBarMenuItemClass.declaredMethods.firstOrNull { method ->
                     method.name == "addItem" &&
                         method.parameterCount == 5 &&
-                        View::class.java.isAssignableFrom(method.parameterTypes[0])
+                        ViewGroup::class.java.isAssignableFrom(method.parameterTypes[0])
                 } ?: return
             addItem.isAccessible = true
             val item =
@@ -344,7 +341,7 @@ internal class StickerDownloadMenu(
         }
     }
 
-    /** arity 4 before 12.8.1 (6916); arity 5 on 12.8.1 (6916) with leading primaryMessage. */
+    /** The final three arguments are the parallel icon, label, and option lists. */
     private fun resolveFillMessageMenuLists(args: Array<Any?>): Triple<Any?, Any?, Any?>? {
         val lastThreeAreLists =
             args.size >= 3 &&
@@ -356,4 +353,9 @@ internal class StickerDownloadMenu(
         }
         return Triple(args[args.size - 3], args[args.size - 2], args[args.size - 1])
     }
+
+    private data class PreviewTarget(
+        val runnable: Runnable,
+        val viewer: Any,
+    )
 }

@@ -28,11 +28,7 @@ class SelectReactionHooker : XposedInterface.Hooker {
 
 class DisableGreetingStickerHooker : XposedInterface.Hooker {
     @Throws(Throwable::class)
-    override fun intercept(chain: XposedInterface.Chain): Any? {
-        val chatGreetingsView = chain.thisObject ?: return chain.proceed()
-        TelegramHooksModule.currentModule().clearGreetingStickerListener(chatGreetingsView)
-        return null
-    }
+    override fun intercept(chain: XposedInterface.Chain): Any? = chain.proceed(arrayOf<Any?>(null))
 }
 
 class PullingDownTargetHooker : XposedInterface.Hooker {
@@ -40,7 +36,11 @@ class PullingDownTargetHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
         val pullingDownDrawable = chain.thisObject ?: return result
-        TelegramHooksModule.currentModule().neutralizePullingDownTarget(pullingDownDrawable)
+        try {
+            TelegramHooksModule.currentModule().neutralizePullingDownTarget(pullingDownDrawable)
+        } catch (t: Throwable) {
+            TelegramHooksModule.currentModule().logError("Failed to neutralize pull-down target", t)
+        }
         return result
     }
 }
@@ -116,15 +116,17 @@ class SecretMediaDeleteHooker : XposedInterface.Hooker {
 
 class PreventDeleteTaskOnContentReadHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        TelegramHooksModule.currentModule().disarmSelfDestructDeleteTask(chain.args.toTypedArray())
-        return chain.proceed()
+        val args = chain.args.toTypedArray()
+        TelegramHooksModule.currentModule().disarmSelfDestructDeleteTask(args)
+        return chain.proceed(args)
     }
 }
 
 class PreventDeleteTaskOnSecretChatReadHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
-        TelegramHooksModule.currentModule().disarmSecretChatDeleteTask(chain.args.toTypedArray())
-        return chain.proceed()
+        val args = chain.args.toTypedArray()
+        TelegramHooksModule.currentModule().disarmSecretChatDeleteTask(args)
+        return chain.proceed(args)
     }
 }
 
@@ -181,8 +183,17 @@ class ProcessSelectedOptionHooker : XposedInterface.Hooker {
 class ContentPreviewGetInstanceHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val viewer = chain.proceed() ?: return null
-        TelegramHooksModule.currentModule().wrapContentPreviewStickerMenu(viewer)
+        TelegramHooksModule.currentModule().installContentPreviewStickerMenuHook(viewer)
         return viewer
+    }
+}
+
+class ContentPreviewShowSheetHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val runnable = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().patchContentPreviewStickerMenu(runnable)
+        return result
     }
 }
 

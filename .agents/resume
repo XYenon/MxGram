@@ -26,4 +26,11 @@ else
   exit 1
 fi
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+telegram_source="$(dirname "${repo_root}")/TelegramAndroid"
+if ! git -C "${telegram_source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Telegram source is missing at ${telegram_source}; run .agents/setup" >&2
+  exit 1
+fi
+
 echo "MxGram orb resume complete"

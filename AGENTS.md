@@ -4,8 +4,8 @@ This file applies to the entire repository.
 
 ## Project Goal
 
-- This repository contains an LSPosed modern API 101 module for Telegram.
-- The current shipped behavior is intentionally narrow: disable Telegram's pull-down jump to next channel, disable double-tap reactions, and disable tap-to-send greeting stickers.
+- This repository contains an LSPosed modern API 102 module for Telegram.
+- The shipped behavior is intentionally limited to the interaction, message, sticker, protected-media, and profile-ID features documented in `README.md`.
 - Prefer preserving that narrow scope unless the user explicitly asks for new behavior.
 
 ## Build And Verify
@@ -29,7 +29,7 @@ This file applies to the entire repository.
 ## Editing Guidance
 
 - Do not add legacy Xposed APIs unless the user explicitly requests them.
-- Keep the module compatible with LSPosed modern API 101.
+- Keep the module compatible with LSPosed modern API 102.
 - Prefer the smallest stable hook point in Telegram over broad or fragile hooks.
 - When changing hook behavior, keep Telegram package scoping explicit.
 - Do not check in generated files from `.direnv/`, `.gradle/`, `build/`, `app/build/`, or `result`.

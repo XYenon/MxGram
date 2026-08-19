@@ -25,8 +25,8 @@ internal class PlusOneReplyRepeater(
         val pending = pendingPlusOneReply.getAndSet(null)
         return try {
             if (pending != null && SystemClock.uptimeMillis() - pending.createdAtUptimeMs <= PLUS_ONE_REPLY_TTL_MS) {
-                val selectedId = selectedObject.javaClass.getMethod("getId").invoke(selectedObject) as Int
-                if (selectedId == pending.selectedMsgId && pending.replyToMsg != null) {
+                val selectedIdentity = messageIdentity(selectedObject)
+                if (selectedIdentity == pending.selectedMessageIdentity && pending.replyToMsg != null) {
                     return invokeProcessForwardFromMyName(
                         chatActivity,
                         selectedObject,
@@ -98,8 +98,8 @@ internal class PlusOneReplyRepeater(
             }
 
             val replyToMsg = findField(selectedObject.javaClass, "replyMessageObject").get(selectedObject) ?: return null
-            val selectedMsgId = selectedObject.javaClass.getMethod("getId").invoke(selectedObject) as Int
-            return PendingPlusOneReply(replyToMsg, selectedMsgId)
+            val selectedIdentity = messageIdentity(selectedObject) ?: return null
+            return PendingPlusOneReply(replyToMsg, selectedIdentity)
         } catch (_: Throwable) {
             return null
         }
@@ -108,6 +108,6 @@ internal class PlusOneReplyRepeater(
 
 private data class PendingPlusOneReply(
     val replyToMsg: Any?,
-    val selectedMsgId: Int,
+    val selectedMessageIdentity: String,
     val createdAtUptimeMs: Long = SystemClock.uptimeMillis(),
 )

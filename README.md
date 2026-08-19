@@ -46,7 +46,7 @@
 
 ## 技术栈
 
-- **LSPosed** — modern API 101
+- **LSPosed** — modern API 102
 - **Kotlin** — AGP 9 内置支持，目标 Java 17
 - **Nix** — Flake + direnv 提供可重现的开发环境
 
@@ -109,7 +109,7 @@ nix develop -c ./gradlew assembleDebug
 | `ChatGreetingsView.setListener`            | 禁用 greeting sticker 发送 | 清空回调                                                      |
 | `ChatActivity.fillMessageMenu`             | 插入 `+1` / 保存 sticker   | 在菜单列表追加自定义选项                                      |
 | `ChatActivity.processSelectedOption`       | 执行 `+1` / 保存 sticker   | `+1` 走转发或重发；保存 sticker 走 `MediaController.saveFile` |
-| `ContentPreviewViewer.getInstance`         | sticker 预览菜单           | 包装 `showSheetRunnable`，追加「保存到相册」项                |
+| `ContentPreviewViewer.getInstance`         | sticker 预览菜单           | hook `showSheetRunnable.run()`，追加「保存到相册」项          |
 | `ChatActivity.createMenu`                  | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发                                    |
 | `MessagesController` noforwards 判断       | 解除保护内容限制           | 强制返回 `false`                                              |
 | `MessageObject` 构造方法                   | 解除保护内容限制           | 清除 `messageOwner.noforwards`                                |
@@ -131,10 +131,10 @@ nix develop -c ./gradlew assembleDebug
 
 ## 依赖说明
 
-Gradle 通过 Maven Central 引入 API 101 对应工件：
+Gradle 通过 Maven Central 引入 API 102 对应工件：
 
 ```text
-io.github.libxposed:api:101.0.1
+io.github.libxposed:api:102.0.0
 ```
 
 ## 开发环境
@@ -155,6 +155,10 @@ direnv allow
 nix develop
 ```
 
+在 Amp orb 中，`.agents/setup` 会将 Telegram 官方源码浅克隆到相邻目录
+`../TelegramAndroid`，并在参考源码没有本地修改或本地提交时更新到 `master` 最新版本。
+`.agents/resume` 只进行快速存在性检查，不访问网络。
+
 ### 格式化与检查
 
 ```bash
@@ -164,8 +168,8 @@ nix flake check  # CI 友好检查
 
 ## Xposed 元数据
 
-- `minApiVersion=101`
-- `targetApiVersion=101`
+- `minApiVersion=102`
+- `targetApiVersion=102`
 - `staticScope=true`
 
 入口文件：`app/src/main/resources/META-INF/xposed/`

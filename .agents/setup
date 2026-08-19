@@ -183,12 +183,57 @@ warm_gradle_wrapper() {
   "$(nix_bin)" develop "${repo_root}" --command ./gradlew --version
 }
 
+ensure_telegram_source() {
+  local repo_root checkout origin_url expected_url current_head previous_remote_head
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  checkout="$(dirname "${repo_root}")/TelegramAndroid"
+  expected_url="https://github.com/DrKLO/Telegram.git"
+
+  if [[ ! -e "${checkout}" ]]; then
+    git clone --depth 1 --single-branch --branch master "${expected_url}" "${checkout}"
+    echo "Telegram source ready at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
+    return 0
+  fi
+
+  if ! git -C "${checkout}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "${checkout} exists but is not a Git checkout" >&2
+    return 1
+  fi
+
+  origin_url="$(git -C "${checkout}" remote get-url origin 2>/dev/null || true)"
+  if [[ "${origin_url}" != "${expected_url}" && "${origin_url}" != "https://github.com/DrKLO/Telegram" ]]; then
+    echo "Refusing to replace ${checkout}: unexpected origin ${origin_url:-<missing>}" >&2
+    return 1
+  fi
+
+  if [[ -n "$(git -C "${checkout}" status --porcelain --untracked-files=no)" ]]; then
+    echo "Telegram source has tracked local changes; skipping update"
+    return 0
+  fi
+
+  current_head="$(git -C "${checkout}" rev-parse HEAD)"
+  previous_remote_head="$(git -C "${checkout}" rev-parse refs/remotes/origin/master 2>/dev/null || true)"
+  if [[ -z "${previous_remote_head}" ]]; then
+    echo "Telegram source has no origin/master reference; skipping update"
+    return 0
+  fi
+  if [[ "${current_head}" != "${previous_remote_head}" ]]; then
+    echo "Telegram source is not at the previously fetched origin/master; skipping update"
+    return 0
+  fi
+
+  git -C "${checkout}" fetch --depth 1 origin master
+  git -C "${checkout}" checkout -B master origin/master
+  echo "Telegram source ready at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
+}
+
 step "Check apt packages" ensure_apt_packages
 step "Install Determinate Nix" install_nix
 source_nix
 step "Ensure nix-daemon" ensure_nix_daemon
 step "Add login-shell Nix hook" ensure_login_shell_hook
 step "Write orb agent guidance" write_orb_guidance
+step "Clone or update Telegram source" ensure_telegram_source
 step "Realize Nix development shell" realize_dev_shell
 step "Warm Gradle wrapper" warm_gradle_wrapper
 

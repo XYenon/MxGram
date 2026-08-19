@@ -27,7 +27,7 @@ internal class PlusOneForwarder(
         if (args == null || args.size < 3) {
             return
         }
-        // Hook args end with icons, items, options; arity 5 adds primaryMessage first (12.8.1 / 6916).
+        // Hook args end with the parallel icons, items, and options lists.
         val (iconsRaw, itemsRaw, optionsRaw) = resolveFillMessageMenuLists(args) ?: return
         if (iconsRaw !is ArrayList<*> || itemsRaw !is ArrayList<*> || optionsRaw !is ArrayList<*>) {
             return
@@ -122,7 +122,15 @@ internal class PlusOneForwarder(
             // Prefer Telegram's internal sending path for forwarding inside the current chat.
             val forwardMessages =
                 chatActivity.javaClass.declaredMethods.firstOrNull { method ->
-                    method.name == "forwardMessages" && method.parameterCount == 6
+                    val params = method.parameterTypes
+                    method.name == "forwardMessages" &&
+                        params.size == 6 &&
+                        ArrayList::class.java.isAssignableFrom(params[0]) &&
+                        params[1] == java.lang.Boolean.TYPE &&
+                        params[2] == java.lang.Boolean.TYPE &&
+                        params[3] == java.lang.Boolean.TYPE &&
+                        params[4] == java.lang.Integer.TYPE &&
+                        params[5] == java.lang.Long.TYPE
                 }
             if (forwardMessages != null) {
                 forwardMessages.isAccessible = true
@@ -150,7 +158,7 @@ internal class PlusOneForwarder(
         invokeProcessForwardFromMyNameBatch(chatActivity, messages, logError)
     }
 
-    /** arity 4 before 12.8.1 (6916); arity 5 on 12.8.1 (6916) with leading primaryMessage. */
+    /** The final three arguments are the parallel icon, label, and option lists. */
     private fun resolveFillMessageMenuLists(args: Array<Any?>): Triple<Any?, Any?, Any?>? {
         val lastThreeAreLists =
             args.size >= 3 &&

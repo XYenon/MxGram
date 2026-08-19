@@ -111,9 +111,14 @@ internal class StickerSaver(
             }
         val saveFile =
             mediaControllerClass.declaredMethods.firstOrNull { method ->
+                val params = method.parameterTypes
                 method.name == "saveFile" &&
-                    method.parameterCount == 7 &&
-                    method.parameterTypes[0] == String::class.java
+                    params.size == 7 &&
+                    params[0] == String::class.java &&
+                    params[1].isAssignableFrom(activity.javaClass) &&
+                    params[2] == java.lang.Integer.TYPE &&
+                    params[5] == callbackClass &&
+                    params[6] == java.lang.Boolean.TYPE
             } ?: return
         saveFile.isAccessible = true
         saveFile.invoke(null, path, activity, GALLERY_SAVE_TYPE, null, mimeType, callback, true)
@@ -237,18 +242,6 @@ internal fun hasGalleryWritePermission(activity: Activity): Boolean {
         return true
     }
     if (android.os.Build.VERSION.SDK_INT > 28) {
-        return true
-    }
-    val noScopedStorage =
-        try {
-            val buildVarsClass = activity.classLoader.loadClass("org.telegram.messenger.BuildVars")
-            val field = buildVarsClass.getDeclaredField("NO_SCOPED_STORAGE")
-            field.isAccessible = true
-            field.getBoolean(null)
-        } catch (_: Throwable) {
-            false
-        }
-    if (android.os.Build.VERSION.SDK_INT > 28 && !noScopedStorage) {
         return true
     }
     return activity.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ==

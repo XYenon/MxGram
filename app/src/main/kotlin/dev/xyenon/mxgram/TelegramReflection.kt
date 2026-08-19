@@ -90,7 +90,7 @@ internal fun findField(
 /**
  * Picks a declared method by name when Telegram ships multiple arities across releases.
  * When several arities match, the highest parameter count wins (e.g. 5 over 4, 19 over 18).
- * Verified against Telegram Android 12.8.1 (6916).
+ * Verified against Telegram Android 12.9.2 (6991).
  */
 internal fun findDeclaredMethodByNameAndArity(
     type: Class<*>,

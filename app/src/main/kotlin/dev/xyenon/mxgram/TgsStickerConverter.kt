@@ -2,6 +2,7 @@ package dev.xyenon.mxgram
 
 import android.graphics.Bitmap
 import java.io.File
+import java.util.zip.GZIPInputStream
 
 internal class TgsStickerConverter(
     private val logError: (String, Throwable) -> Unit,
@@ -10,8 +11,8 @@ internal class TgsStickerConverter(
         path: String,
         classLoader: ClassLoader,
     ): String? {
-        val frames = renderFrames(path, classLoader) ?: return null
         return try {
+            val frames = renderFrames(path, classLoader) ?: return null
             val outputPath = outputPathFor(path)
             val frameDurationMs = (1000f / frames.fps.coerceAtLeast(1)).toInt().coerceAtLeast(1)
             if (
@@ -38,7 +39,7 @@ internal class TgsStickerConverter(
             }
             outputPath
         } catch (t: Throwable) {
-            logError("Failed to encode TGS sticker as animated WebP", t)
+            logError("Failed to convert TGS sticker to animated WebP", t)
             null
         }
     }
@@ -53,22 +54,31 @@ internal class TgsStickerConverter(
         path: String,
         classLoader: ClassLoader,
     ): EncodedFrames? {
-        val cacheOptionsClass = Class.forName("org.telegram.messenger.utils.BitmapsCache\$CacheOptions", false, classLoader)
-        val cacheOptions = cacheOptionsClass.getDeclaredConstructor().newInstance()
-        val lottieClass = Class.forName("org.telegram.ui.Components.RLottieDrawable", false, classLoader)
-        val drawable =
-            lottieClass
-                .getConstructor(
-                    File::class.java,
-                    Int::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    cacheOptionsClass,
-                    java.lang.Boolean.TYPE,
-                    IntArray::class.java,
-                    Int::class.javaPrimitiveType,
-                ).newInstance(File(path), 512, 512, cacheOptions, false, null, 0)
-
+        var drawable: Any? = null
+        var workingFile: File? = null
         return try {
+            val sourceFile = File(path)
+            val temporaryFile =
+                File.createTempFile(
+                    "mxgram-tgs-",
+                    ".tgs",
+                    sourceFile.parentFile ?: File("."),
+                )
+            workingFile = temporaryFile
+            sourceFile.copyTo(temporaryFile, overwrite = true)
+
+            val cacheOptionsClass =
+                Class.forName("org.telegram.messenger.utils.BitmapsCache\$CacheOptions", false, classLoader)
+            val cacheOptions = cacheOptionsClass.getDeclaredConstructor().newInstance()
+            val lottieClass = Class.forName("org.telegram.ui.Components.RLottieDrawable", false, classLoader)
+            drawable =
+                createLottieDrawable(
+                    lottieClass,
+                    cacheOptionsClass,
+                    cacheOptions,
+                    temporaryFile.absolutePath,
+                )
+
             val width = invokeMethod(drawable, "getIntrinsicWidth") as? Int ?: return null
             val height = invokeMethod(drawable, "getIntrinsicHeight") as? Int ?: return null
             if (width <= 0 || height <= 0) {
@@ -101,15 +111,20 @@ internal class TgsStickerConverter(
             logError("Failed to render TGS sticker frames", t)
             null
         } finally {
-            try {
-                findMethod(drawable.javaClass, "recycle", Boolean::class.javaPrimitiveType!!).invoke(drawable, false)
-            } catch (t: Throwable) {
-                logError("Failed to recycle RLottieDrawable", t)
+            val createdDrawable = drawable
+            if (createdDrawable != null) {
+                try {
+                    invokeMethod(createdDrawable, "releaseForGenerateCache")
+                } catch (_: Throwable) {
+                }
+                try {
+                    findMethod(createdDrawable.javaClass, "recycle", Boolean::class.javaPrimitiveType!!)
+                        .invoke(createdDrawable, false)
+                } catch (t: Throwable) {
+                    logError("Failed to recycle RLottieDrawable", t)
+                }
             }
-            try {
-                invokeMethod(drawable, "releaseForGenerateCache")
-            } catch (_: Throwable) {
-            }
+            workingFile?.delete()
         }
     }
 
@@ -147,3 +162,53 @@ internal class TgsStickerConverter(
         private const val DEFAULT_FPS = 30
     }
 }
+
+internal fun createLottieDrawable(
+    lottieClass: Class<*>,
+    cacheOptionsClass: Class<*>,
+    cacheOptions: Any,
+    path: String,
+): Any =
+    try {
+        val file = File(path)
+        lottieClass
+            .getConstructor(
+                File::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                cacheOptionsClass,
+                java.lang.Boolean.TYPE,
+                IntArray::class.java,
+                Int::class.javaPrimitiveType,
+                java.lang.Boolean.TYPE,
+            ).newInstance(file, readGzippedLottieJson(file), 512, 512, cacheOptions, false, null, 0, false)
+    } catch (_: NoSuchMethodException) {
+        lottieClass
+            .getConstructor(
+                File::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                cacheOptionsClass,
+                java.lang.Boolean.TYPE,
+                IntArray::class.java,
+                Int::class.javaPrimitiveType,
+            ).newInstance(File(path), 512, 512, cacheOptions, false, null, 0)
+    }
+
+internal fun readGzippedLottieJson(file: File): String? {
+    return file.inputStream().buffered().use { input ->
+        input.mark(2)
+        val isGzip = input.read() == GZIP_MAGIC_FIRST && input.read() == GZIP_MAGIC_SECOND
+        input.reset()
+        if (!isGzip) {
+            return@use null
+        }
+        GZIPInputStream(input).bufferedReader(Charsets.UTF_8).use { reader ->
+            reader.readText()
+        }
+    }
+}
+
+private const val GZIP_MAGIC_FIRST = 0x1F
+private const val GZIP_MAGIC_SECOND = 0x8B

@@ -16,7 +16,7 @@ internal fun messageIdentity(messageObject: Any): String? =
 /**
  * Mirrors [ChatActivity.isPeerNoForwards] / [MessagesController.isChatNoForwards] using raw
  * [TLRPC.Chat] / [TLRPC.UserFull] fields. Does not call hooked [MessagesController] helpers.
- * Verified against Telegram Android 12.8.1 (6916).
+ * Verified against Telegram Android 12.9.2 (6991).
  */
 internal fun isPeerNoForwardsFromRawPeerState(chatActivity: Any): Boolean =
     try {
@@ -131,7 +131,7 @@ internal object PlusOneNoForwardsTracker {
 
 /**
  * Re-sends message content without a forward header via Telegram
- * [SendMessagesHelper.processForwardFromMyName] (12.8.1 / 6916): text entities, web previews,
+ * [SendMessagesHelper.processForwardFromMyName] (12.9.2 / 6991): text entities, web previews,
  * photos, documents, stickers, geo, contacts, etc.
  */
 internal fun invokeProcessForwardFromMyName(

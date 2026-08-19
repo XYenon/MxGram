@@ -3,12 +3,12 @@ package dev.xyenon.mxgram
 import android.view.View
 
 /**
- * Mirrors [ChatActivity.fillMessageMenu] `allowChatActions` gates (Telegram 12.8.1 / 6916) so +1
+ * Mirrors [ChatActivity.fillMessageMenu] `allowChatActions` gates (Telegram 12.9.2 / 6991) so +1
  * only appears when the official message menu would allow chat actions.
  */
 internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
     try {
-        val classLoader = chatActivity.javaClass.classLoader ?: return true
+        val classLoader = chatActivity.javaClass.classLoader ?: return false
         val chatActivityClass = chatActivity.javaClass
         val chatObjectClass = Class.forName("org.telegram.messenger.ChatObject", false, classLoader)
         val userObjectClass = Class.forName("org.telegram.messenger.UserObject", false, classLoader)
@@ -49,7 +49,7 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
             return false
         }
 
-        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "canSendMessage") == false) {
+        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "canSendMessage") != true) {
             return false
         }
 
@@ -130,7 +130,7 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
                         "canManageTopic",
                         arrayOf(currentAccount, currentChat, forumTopic),
                     )
-                if (canManageTopic != null && !canManageTopic) {
+                if (canManageTopic != true) {
                     return false
                 }
             }
@@ -138,8 +138,8 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
 
         return true
     } catch (_: Throwable) {
-        // Fail open: keep the option available if Telegram internals change.
-        return true
+        // Do not expose a send action when Telegram's current capability cannot be established.
+        return false
     }
 }
 
@@ -149,7 +149,7 @@ private fun invokeInstanceBooleanOrNull(
     name: String,
 ): Boolean? =
     try {
-        val method = type.getMethod(name)
+        val method = findMethod(type, name)
         val result = method.invoke(instance)
         if (result is Boolean) result else null
     } catch (_: Throwable) {

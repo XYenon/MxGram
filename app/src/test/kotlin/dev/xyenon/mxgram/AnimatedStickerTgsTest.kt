@@ -2,9 +2,10 @@ package dev.xyenon.mxgram
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.zip.GZIPInputStream
+import java.io.File
 
 class AnimatedStickerTgsTest {
     @Test
@@ -14,12 +15,51 @@ class AnimatedStickerTgsTest {
 
     @Test
     fun animatedStickerFixture_isGzipWrappedLottieJson() {
-        GZIPInputStream(fixture().inputStream()).use { input ->
-            val json = input.readBytes().decodeToString()
-            assertTrue(json.startsWith("{"))
-            assertTrue(json.contains("\"fr\""))
-            assertTrue(json.contains("\"layers\""))
-        }
+        val json = checkNotNull(readGzippedLottieJson(fixture()))
+        assertTrue(json.startsWith("{"))
+        assertTrue(json.contains("\"fr\""))
+        assertTrue(json.contains("\"layers\""))
+    }
+
+    @Test
+    fun currentRlottieConstructor_receivesDecompressedJson() {
+        val drawable =
+            createLottieDrawable(
+                CurrentRlottieDrawable::class.java,
+                FakeCacheOptions::class.java,
+                FakeCacheOptions(),
+                fixture().absolutePath,
+            ) as CurrentRlottieDrawable
+
+        assertEquals(fixture().absolutePath, drawable.file.absolutePath)
+        assertTrue(drawable.json?.startsWith("{") == true)
+    }
+
+    @Test
+    fun currentRlottieConstructor_receivesNullForPlainJson() {
+        val plainJson = TestFixtures.artifact("plain-lottie.json").apply { writeText("{}") }
+        val drawable =
+            createLottieDrawable(
+                CurrentRlottieDrawable::class.java,
+                FakeCacheOptions::class.java,
+                FakeCacheOptions(),
+                plainJson.absolutePath,
+            ) as CurrentRlottieDrawable
+
+        assertNull(drawable.json)
+    }
+
+    @Test
+    fun legacyRlottieConstructor_remainsSupported() {
+        val drawable =
+            createLottieDrawable(
+                LegacyRlottieDrawable::class.java,
+                FakeCacheOptions::class.java,
+                FakeCacheOptions(),
+                fixture().absolutePath,
+            ) as LegacyRlottieDrawable
+
+        assertEquals(fixture().absolutePath, drawable.file.absolutePath)
     }
 
     @Test
@@ -111,3 +151,27 @@ class AnimatedStickerTgsTest {
             "3653a17df7cf7e032a4458999a7d0a9a6837f881a800650d8b2b3c899fd1e99d"
     }
 }
+
+internal class FakeCacheOptions
+
+internal class CurrentRlottieDrawable(
+    val file: File,
+    val json: String?,
+    @Suppress("UNUSED_PARAMETER") width: Int,
+    @Suppress("UNUSED_PARAMETER") height: Int,
+    @Suppress("UNUSED_PARAMETER") cacheOptions: FakeCacheOptions,
+    @Suppress("UNUSED_PARAMETER") limitFps: Boolean,
+    @Suppress("UNUSED_PARAMETER") colorReplacement: IntArray?,
+    @Suppress("UNUSED_PARAMETER") fitzModifier: Int,
+    @Suppress("UNUSED_PARAMETER") isSingleChannel: Boolean,
+)
+
+internal class LegacyRlottieDrawable(
+    val file: File,
+    @Suppress("UNUSED_PARAMETER") width: Int,
+    @Suppress("UNUSED_PARAMETER") height: Int,
+    @Suppress("UNUSED_PARAMETER") cacheOptions: FakeCacheOptions,
+    @Suppress("UNUSED_PARAMETER") limitFps: Boolean,
+    @Suppress("UNUSED_PARAMETER") colorReplacement: IntArray?,
+    @Suppress("UNUSED_PARAMETER") fitzModifier: Int,
+)
