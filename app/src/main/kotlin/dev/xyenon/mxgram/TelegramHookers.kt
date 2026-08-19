@@ -45,6 +45,46 @@ class PullingDownTargetHooker : XposedInterface.Hooker {
     }
 }
 
+class ReplyLayoutHooker : XposedInterface.Hooker {
+    companion object {
+        private val replyMessage = ThreadLocal<Any?>()
+
+        @Volatile
+        private var replyMessageObjectField: Field? = null
+
+        internal fun isReplyMessage(messageObject: Any?): Boolean = messageObject != null && replyMessage.get() === messageObject
+    }
+
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val messageObject = chain.args.firstOrNull() ?: return chain.proceed()
+        val field =
+            replyMessageObjectField ?: findField(messageObject.javaClass, "replyMessageObject").also {
+                replyMessageObjectField = it
+            }
+        val target = field.get(messageObject) ?: return chain.proceed()
+        val previous = replyMessage.get()
+        replyMessage.set(target)
+        return try {
+            chain.proceed()
+        } finally {
+            if (previous == null) {
+                replyMessage.remove()
+            } else {
+                replyMessage.set(previous)
+            }
+        }
+    }
+}
+
+class ReplyForwardedNameHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (ReplyLayoutHooker.isReplyMessage(chain.thisObject)) {
+            return null
+        }
+        return chain.proceed()
+    }
+}
+
 class SecretMessageReadHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val chatActivity = chain.thisObject ?: return chain.proceed()

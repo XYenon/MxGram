@@ -50,6 +50,8 @@ class TelegramHooksModule : XposedModule() {
             Class.forName("org.telegram.ui.Components.ChatGreetingsView", false, classLoader)
         val pullingDownDrawableClass =
             Class.forName("org.telegram.ui.ChatPullingDownDrawable", false, classLoader)
+        val chatMessageCellClass =
+            Class.forName("org.telegram.ui.Cells.ChatMessageCell", false, classLoader)
 
         hookNoForwardsRestrictions(messagesControllerClass)
         hookMessageNoForwardsFlag(messageObjectClass, tlrpcMessageClass)
@@ -62,6 +64,25 @@ class TelegramHooksModule : XposedModule() {
         hookPlusOneForward(chatActivityClass)
         hookStickerDownload(classLoader)
         hookProfileIdDisplay(profileActivityClass)
+        hookReplyForwardAuthor(chatMessageCellClass, messageObjectClass)
+    }
+
+    private fun hookReplyForwardAuthor(
+        chatMessageCellClass: Class<*>,
+        messageObjectClass: Class<*>,
+    ) {
+        try {
+            val setMessageObjectInternal =
+                chatMessageCellClass.getDeclaredMethod("setMessageObjectInternal", messageObjectClass)
+            setMessageObjectInternal.isAccessible = true
+            hook(setMessageObjectInternal).intercept(ReplyLayoutHooker())
+
+            val getForwardedName = messageObjectClass.getDeclaredMethod("getForwardedName")
+            getForwardedName.isAccessible = true
+            hook(getForwardedName).intercept(ReplyForwardedNameHooker())
+        } catch (t: Throwable) {
+            logError("Failed to install reply forward author hook", t)
+        }
     }
 
     private fun hookNoForwardsRestrictions(messagesControllerClass: Class<*>) {
