@@ -57,12 +57,11 @@
                     buildToolsVersion
                   ];
 
-                  platformToolsVersion = "35.0.2";
                   cmdLineToolsVersion = "13.0";
                 };
 
                 androidComposition = pkgs.androidenv.composeAndroidPackages {
-                  inherit (android) platformToolsVersion cmdLineToolsVersion buildToolsVersions;
+                  inherit (android) cmdLineToolsVersion buildToolsVersions;
                   platformVersions = [ android.platformVersion ];
                   includeEmulator = false;
                   includeSystemImages = false;
