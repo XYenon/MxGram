@@ -1,0 +1,175 @@
+# MxGram
+
+> 面向官方 Telegram 的 LSPosed 模块，用于调整部分交互并扩展消息与资料页的常用能力。
+
+## 功能
+
+| 功能                          | 说明                                                        |
+| ----------------------------- | ----------------------------------------------------------- |
+| 🚫 禁用下拉跳转               | 在频道页下滑时不再跳转到下一个频道                          |
+| 🚫 禁用双击 reaction          | 双击消息不再触发快速 reaction                               |
+| 🚫 禁用 greeting sticker 发送 | 点击问候贴纸不再直接发送，仅保留展示                        |
+| 🔓 解除保护内容限制           | 允许在开启“限制保存内容”的会话中截图、复制等                |
+| 💾 允许保存阅后即焚媒体       | 阅后即焚媒体按普通媒体处理：可保存到相册/下载，不会自动清空 |
+| ➕ 消息 `+1` 重发             | 在消息菜单中新增 `+1` 选项，快速转发或直接按内容重发        |
+| 💾 保存 sticker 到相册        | 聊天消息菜单与 sticker 预览菜单新增「保存到相册」           |
+| 🆔 头像下显示 ID              | 资料页头像区域下方显示用户 / 群组 / 频道 API ID，长按可复制 |
+| ↩️ 回复引用转发者             | 回复转发消息时显示转发该消息的用户，而非原始来源            |
+
+### `+1` 详细说明
+
+当当前会话允许发消息时，长按消息弹出的菜单中会多一个 **`+1`** 按钮：
+
+- **点按**：将消息以「带来源信息的转发」形式重新发送到当前会话；若原消息来自开启“限制保存内容”的会话，则改为直接发送一条内容相同的消息
+- **长按**（仅当该消息是回复消息时）：将消息内容以「回复同一条消息」的方式再发一次（不带转发来源信息）
+
+### 保存 sticker 详细说明
+
+参考 Nekogram 的菜单入口设计，通过 hook 为官方 Telegram 补上 sticker 下载能力：
+
+- **聊天消息**：长按 sticker 消息，菜单中会出现「保存到相册」
+- **sticker 预览**：在 sticker 面板长按预览时，菜单中同样会出现「保存到相册」
+- **TGS 动态贴纸**：渲染后导出为 Animated WebP（`.webp`）
+- **其他格式**：直接保存原始文件（如静态 WebP、WebM 等），不做转换
+- **保存位置**：所有 sticker 统一写入系统相册（图片目录）
+
+## 作用域
+
+模块默认只作用于官方 Telegram 包名：
+
+- `org.telegram.messenger`
+
+如需支持其他 Telegram 变体，可修改：
+
+- `app/src/main/resources/META-INF/xposed/scope.list`
+- `TelegramHooksModule.kt` 中的 `TARGET_PACKAGE` 常量
+
+## 技术栈
+
+- **LSPosed** — modern API 102
+- **Kotlin** — AGP 9 内置支持，目标 Java 17
+- **Nix** — Flake + direnv 提供可重现的开发环境
+
+## 快速上手
+
+### 1. 构建
+
+```bash
+# 方式一：使用 direnv（推荐）
+direnv allow
+./gradlew assembleDebug
+
+# 方式二：不进入 shell
+nix develop -c ./gradlew assembleDebug
+```
+
+产物路径：`app/build/outputs/apk/debug/app-debug.apk`
+
+### 2. 安装
+
+1. 将 APK 安装到设备
+2. 在 LSPosed 中启用 MxGram 模块
+3. 将作用域勾选到 Telegram（`org.telegram.messenger`）
+4. 重启 Telegram 进程
+
+## 项目结构
+
+```text
+.
+├── app/
+│   ├── build.gradle.kts
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── kotlin/dev/xyenon/mxgram/
+│       │   ├── TelegramHooksModule.kt       # 主 hook 入口
+│       │   ├── PlusOneForwarder.kt          # +1 转发逻辑
+│       │   └── *Hooker.kt                   # 各 hook 实现
+│       ├── res/values/strings.xml
+│       └── resources/META-INF/xposed/       # Xposed 元数据
+│           ├── java_init.list
+│           ├── module.prop
+│           └── scope.list
+├── flake.nix
+├── treefmt.nix
+├── .envrc
+├── gradlew
+└── README.md
+```
+
+## 实现细节
+
+### Hook 点一览
+
+| Hook 位置                                  | 目的                       | 策略                                                          |
+| ------------------------------------------ | -------------------------- | ------------------------------------------------------------- |
+| `ChatActivity.animateToNextChat()`         | 禁用下拉跳转               | 直接短路                                                      |
+| `ChatPullingDownDrawable` update 方法      | 兜底清除跳转目标           | 清空 nextChat/nextTopic                                       |
+| `ChatActivity.createView`                  | 禁用双击 reaction          | 替换监听，禁用 `hasDoubleTap()`                               |
+| `ChatActivity.selectReaction`              | 双保险拦截双击             | `fromDoubleTap` 为 `true` 时拦截                              |
+| `ChatGreetingsView.setListener`            | 禁用 greeting sticker 发送 | 清空回调                                                      |
+| `ChatActivity.fillMessageMenu`             | 插入 `+1` / 保存 sticker   | 在菜单列表追加自定义选项                                      |
+| `ChatActivity.processSelectedOption`       | 执行 `+1` / 保存 sticker   | `+1` 走转发或重发；保存 sticker 走 `MediaController.saveFile` |
+| `ContentPreviewViewer.getInstance`         | sticker 预览菜单           | hook `showSheetRunnable.run()`，追加「保存到相册」项          |
+| `ChatActivity.createMenu`                  | 为 `+1` 追加长按逻辑       | 回复消息时保留回复关系重发                                    |
+| `MessagesController` noforwards 判断       | 解除保护内容限制           | 强制返回 `false`                                              |
+| `MessageObject` 构造方法                   | 解除保护内容限制           | 清除 `messageOwner.noforwards`                                |
+| `MessageObject` 构造方法                   | 允许保存阅后即焚媒体       | 清除 `messageOwner.media.ttl_seconds` 等标记                  |
+| `ChatActivity.sendSecretMessageRead`       | 阻止自毁媒体打开后排队删除 | 保留已读上报，但不设置本地销毁                                |
+| `ChatActivity.sendSecretMediaDelete`       | 阻止一次性媒体关闭即焚     | 直接移除关闭时删除回调                                        |
+| `MessagesController.markMessageAsRead*`    | 阻止自毁媒体补建删除任务   | 兜底禁用 `createDeleteTask` / TTL 删除任务                    |
+| `MessagesController` show-once 删除任务    | 阻止一次性媒体落盘删除     | 直接短路 `create/doDeleteShowOnceTask`                        |
+| `ProfileActivity.createView`               | 添加资料页 ID 文本         | 在头像容器追加只读 `TextView`                                 |
+| `ProfileActivity.updateProfileData`        | 刷新资料页 ID              | 同步用户 / 群组 / 频道 API ID                                 |
+| `ProfileActivity` 布局 / 展开方法          | 对齐资料页 ID              | 跟随头像区域位置、颜色和透明度                                |
+| `ChatMessageCell.setMessageObjectInternal` | 限定回复预览布局作用域     | 仅标记当前正在布局的 `replyMessageObject`                     |
+| `MessageObject.getForwardedName`           | 回复引用显示实际转发者     | 回复预览内返回空值，复用 Telegram 的实际发送者名称回退逻辑    |
+
+主实现文件：`app/src/main/kotlin/dev/xyenon/mxgram/TelegramHooksModule.kt`
+
+> 若 Telegram 升级后 hook 失效，优先检查以下类 / 方法：
+> `ChatActivity`、`ChatActivity.sendSecretMessageRead`、`ChatActivity.sendSecretMediaDelete`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`MessagesController.markMessageAsRead2`、`ProfileActivity`、`ChatActivity.selectReaction`、`ChatMessageCell.setMessageObjectInternal`、`MessageObject.getForwardedName`
+
+## 依赖说明
+
+Gradle 通过 Maven Central 引入 API 102 对应工件：
+
+```text
+io.github.libxposed:api:102.0.0
+```
+
+## 开发环境
+
+### direnv（推荐）
+
+```bash
+direnv allow
+```
+
+进入目录后自动加载。提供 JDK 21、Android SDK platform 35、build-tools 35/36。
+
+> build-tools 36 是必需的：AGP 构建时会请求该版本，若不预装会向只读 Nix Store 写入并失败。
+
+### 手动进入 nix shell
+
+```bash
+nix develop
+```
+
+在 Amp orb 中，`.agents/setup` 会将 Telegram 官方源码浅克隆到相邻目录
+`../TelegramAndroid`，并在参考源码没有本地修改或本地提交时更新到 `master` 最新版本。
+`.agents/resume` 只进行快速存在性检查，不访问网络。
+
+### 格式化与检查
+
+```bash
+nix fmt          # 格式化（Nix/Java/Kotlin/XML/Markdown）
+nix flake check  # CI 友好检查
+```
+
+## Xposed 元数据
+
+- `minApiVersion=102`
+- `targetApiVersion=102`
+- `staticScope=true`
+
+入口文件：`app/src/main/resources/META-INF/xposed/`

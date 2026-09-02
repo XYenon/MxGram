@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Idempotent orb bootstrap for MxGram: Determinate Nix + flake dev shell.
+# Amp runs this from the repository root on a fresh or stale project snapshot.
+
+step() {
+  local name="$1"
+  shift
+  local start end
+  start="$(date +%s)"
+  echo "==> ${name}"
+  "$@"
+  end="$(date +%s)"
+  echo "==> ${name} done in $((end - start))s"
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+source_nix() {
+  # The installer cannot update this running script's environment.
+  # shellcheck disable=SC1091
+  if [[ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]]; then
+    # shellcheck disable=SC1091
+    source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+  elif [[ -f "${HOME}/.nix-profile/etc/profile.d/nix.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${HOME}/.nix-profile/etc/profile.d/nix.sh"
+  fi
+}
+
+nix_bin() {
+  if [[ -x /nix/var/nix/profiles/default/bin/nix ]]; then
+    printf '%s\n' /nix/var/nix/profiles/default/bin/nix
+  elif [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
+    printf '%s\n' "${HOME}/.nix-profile/bin/nix"
+  elif have_cmd nix; then
+    command -v nix
+  else
+    return 1
+  fi
+}
+
+ensure_apt_packages() {
+  local -a needed=()
+  local pkg
+  for pkg in curl ca-certificates xz-utils sudo; do
+    if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
+      needed+=("${pkg}")
+    fi
+  done
+  if ((${#needed[@]} == 0)); then
+    echo "apt packages already present"
+    return 0
+  fi
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${needed[@]}"
+}
+
+install_nix() {
+  if nix_bin >/dev/null; then
+    echo "Nix already installed: $(nix_bin)"
+    return 0
+  fi
+
+  curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
+    sh -s -- install linux --no-confirm
+}
+
+ensure_nix_daemon() {
+  if ! have_cmd systemctl; then
+    return 0
+  fi
+  if systemctl list-unit-files nix-daemon.service >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet nix-daemon.service &&
+      ! systemctl is-active --quiet nix-daemon.socket; then
+      sudo systemctl start nix-daemon.socket nix-daemon.service
+    fi
+  fi
+}
+
+ensure_login_shell_hook() {
+  local repo_root profile_file nix_path begin_marker end_marker hook tmp
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  profile_file="${HOME}/.bash_profile"
+  nix_path="$(nix_bin)"
+  begin_marker="# mxgram Nix development shell"
+  end_marker="# end mxgram Nix development shell"
+
+  touch "${profile_file}"
+
+  hook="$(
+    cat <<EOF
+${begin_marker}
+if [[ -z "\${IN_NIX_SHELL:-}" && "\${PWD}" == "${repo_root}" ]]; then
+  if [[ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]]; then
+    # shellcheck disable=SC1091
+    source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+  fi
+  eval "\$("${nix_path}" print-dev-env "${repo_root}")"
+  # print-dev-env replaces PATH; keep the Nix client available.
+  case ":\${PATH}:" in
+    *:$(printf '%q' "$(dirname "${nix_path}")"):*) ;;
+    *) export PATH="$(dirname "${nix_path}"):\${PATH}" ;;
+  esac
+fi
+${end_marker}
+EOF
+  )"
+
+  if awk -v begin="${begin_marker}" -v end="${end_marker}" '
+    $0 == begin { in_hook = 1 }
+    in_hook { hook = hook $0 ORS }
+    $0 == end { found = 1 }
+    END { if (found) printf "%s", hook }
+  ' "${profile_file}" | cmp -s - <(printf '%s\n' "${hook}"); then
+    echo "login-shell hook already present"
+    return 0
+  fi
+
+  tmp="$(mktemp)"
+  if grep -Fqx "${begin_marker}" "${profile_file}" 2>/dev/null &&
+    grep -Fqx "${end_marker}" "${profile_file}" 2>/dev/null; then
+    awk -v begin="${begin_marker}" -v end="${end_marker}" '
+      $0 == begin { skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "${profile_file}" >"${tmp}"
+  elif grep -Fqx "${begin_marker}" "${profile_file}" 2>/dev/null; then
+    # Older hook without an end marker: drop from the marker to EOF.
+    awk -v begin="${begin_marker}" '
+      $0 == begin { exit }
+      { print }
+    ' "${profile_file}" >"${tmp}"
+  else
+    cat "${profile_file}" >"${tmp}"
+  fi
+
+  # Keep a single trailing newline before the hook block.
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "${tmp}"
+  printf '\n%s\n' "${hook}" >>"${tmp}"
+  mv "${tmp}" "${profile_file}"
+  echo "refreshed login-shell hook in ${profile_file}"
+}
+
+write_orb_guidance() {
+  local amp_config_dir marker guidance_file
+  amp_config_dir="${HOME}/.config/amp"
+  guidance_file="${amp_config_dir}/AGENTS.md"
+  marker="<!-- mxgram-orb-guidance -->"
+  mkdir -p "${amp_config_dir}"
+  touch "${guidance_file}"
+  if grep -Fq "${marker}" "${guidance_file}" 2>/dev/null; then
+    echo "orb guidance already present"
+    return 0
+  fi
+
+  cat >>"${guidance_file}" <<'EOF'
+
+<!-- mxgram-orb-guidance -->
+# MxGram orb notes
+
+- Login shells started in the repository root load the Nix flake via `nix print-dev-env`.
+- Prefer `./gradlew assembleDebug` or `nix develop -c ./gradlew assembleDebug` for verification.
+- `JAVA_HOME`, `ANDROID_HOME`, and `ANDROID_SDK_ROOT` come from `flake.nix`. The Nix Android SDK is read-only; do not write into it.
+- AGP needs build-tools 36 from the flake. Do not let Gradle download SDK components into the Nix store path.
+- There is no long-lived app server. Do not add `.amp/services.yaml` unless a portal is required.
+EOF
+  echo "wrote orb guidance to ${guidance_file}"
+}
+
+realize_dev_shell() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  "$(nix_bin)" develop "${repo_root}" --command true
+}
+
+warm_gradle_wrapper() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  "$(nix_bin)" develop "${repo_root}" --command ./gradlew --version
+}
+
+ensure_telegram_source() {
+  local repo_root checkout origin_url expected_url current_head previous_remote_head
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  checkout="$(dirname "${repo_root}")/TelegramAndroid"
+  expected_url="https://github.com/DrKLO/Telegram.git"
+
+  if [[ ! -e "${checkout}" ]]; then
+    git clone --depth 1 --single-branch --branch master "${expected_url}" "${checkout}"
+    echo "Telegram source ready at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
+    return 0
+  fi
+
+  if ! git -C "${checkout}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "${checkout} exists but is not a Git checkout" >&2
+    return 1
+  fi
+
+  origin_url="$(git -C "${checkout}" remote get-url origin 2>/dev/null || true)"
+  if [[ "${origin_url}" != "${expected_url}" && "${origin_url}" != "https://github.com/DrKLO/Telegram" ]]; then
+    echo "Refusing to replace ${checkout}: unexpected origin ${origin_url:-<missing>}" >&2
+    return 1
+  fi
+
+  if [[ -n "$(git -C "${checkout}" status --porcelain --untracked-files=no)" ]]; then
+    echo "Telegram source has tracked local changes; skipping update"
+    return 0
+  fi
+
+  current_head="$(git -C "${checkout}" rev-parse HEAD)"
+  previous_remote_head="$(git -C "${checkout}" rev-parse refs/remotes/origin/master 2>/dev/null || true)"
+  if [[ -z "${previous_remote_head}" ]]; then
+    echo "Telegram source has no origin/master reference; skipping update"
+    return 0
+  fi
+  if [[ "${current_head}" != "${previous_remote_head}" ]]; then
+    echo "Telegram source is not at the previously fetched origin/master; skipping update"
+    return 0
+  fi
+
+  git -C "${checkout}" fetch --depth 1 origin master
+  git -C "${checkout}" checkout -B master origin/master
+  echo "Telegram source ready at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
+}
+
+step "Check apt packages" ensure_apt_packages
+step "Install Determinate Nix" install_nix
+source_nix
+step "Ensure nix-daemon" ensure_nix_daemon
+step "Add login-shell Nix hook" ensure_login_shell_hook
+step "Write orb agent guidance" write_orb_guidance
+step "Clone or update Telegram source" ensure_telegram_source
+step "Realize Nix development shell" realize_dev_shell
+step "Warm Gradle wrapper" warm_gradle_wrapper
+
+echo "MxGram orb setup complete"
+echo "nix=$(nix_bin) ($(nix --version 2>/dev/null || "$(nix_bin)" --version))"

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fast, idempotent reconnect for an existing MxGram orb.
+# Amp waits at most 10 seconds; do not install packages here.
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+if have_cmd systemctl; then
+  if systemctl list-unit-files nix-daemon.service >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet nix-daemon.service &&
+      ! systemctl is-active --quiet nix-daemon.socket; then
+      sudo systemctl start nix-daemon.socket nix-daemon.service
+    fi
+  fi
+fi
+
+if [[ -x /nix/var/nix/profiles/default/bin/nix ]]; then
+  /nix/var/nix/profiles/default/bin/nix --version >/dev/null
+elif [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
+  "${HOME}/.nix-profile/bin/nix" --version >/dev/null
+else
+  echo "Nix is not installed; run .agents/setup" >&2
+  exit 1
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+telegram_source="$(dirname "${repo_root}")/TelegramAndroid"
+if ! git -C "${telegram_source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Telegram source is missing at ${telegram_source}; run .agents/setup" >&2
+  exit 1
+fi
+
+echo "MxGram orb resume complete"
