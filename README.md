@@ -156,8 +156,9 @@ nix develop
 ```
 
 在 Amp orb 中，`.agents/setup` 会将 Telegram 官方源码浅克隆到相邻目录
-`../TelegramAndroid`，并在参考源码没有本地修改或本地提交时更新到 `master` 最新版本。
-`.agents/resume` 只进行快速存在性检查，不访问网络。
+`../TelegramAndroid`。快照恢复后会直接复用已有 checkout，避免每次 setup 都联网更新。
+setup 还会预热 Nix 开发环境、Gradle 依赖、单元测试和 debug APK 构建；
+`.agents/resume` 只进行快速环境修复与存在性检查，不访问网络。
 
 ### 格式化与检查
 

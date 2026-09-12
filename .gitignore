@@ -1,4 +1,5 @@
 # keep-sorted start
+.amp/portals/*
 .direnv/
 .gradle/
 .idea/

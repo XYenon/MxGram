@@ -82,7 +82,7 @@ ensure_nix_daemon() {
 }
 
 ensure_login_shell_hook() {
-  local repo_root profile_file nix_path begin_marker end_marker hook tmp
+  local repo_root profile_file nix_path begin_marker end_marker hook last_nonblank tmp
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   profile_file="${HOME}/.bash_profile"
   nix_path="$(nix_bin)"
@@ -110,7 +110,8 @@ ${end_marker}
 EOF
   )"
 
-  if awk -v begin="${begin_marker}" -v end="${end_marker}" '
+  last_nonblank="$(awk 'NF { line = $0 } END { print line }' "${profile_file}")"
+  if [[ "${last_nonblank}" == "${end_marker}" ]] && awk -v begin="${begin_marker}" -v end="${end_marker}" '
     $0 == begin { in_hook = 1 }
     in_hook { hook = hook $0 ORS }
     $0 == end { found = 1 }
@@ -145,6 +146,11 @@ EOF
   echo "refreshed login-shell hook in ${profile_file}"
 }
 
+ensure_nix_on_path() {
+  mkdir -p "${HOME}/.local/bin"
+  ln -sfn "$(nix_bin)" "${HOME}/.local/bin/nix"
+}
+
 write_orb_guidance() {
   local amp_config_dir marker guidance_file
   amp_config_dir="${HOME}/.config/amp"
@@ -177,14 +183,14 @@ realize_dev_shell() {
   "$(nix_bin)" develop "${repo_root}" --command true
 }
 
-warm_gradle_wrapper() {
+warm_gradle_project() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  "$(nix_bin)" develop "${repo_root}" --command ./gradlew --version
+  "$(nix_bin)" develop "${repo_root}" --command ./gradlew testDebugUnitTest assembleDebug
 }
 
 ensure_telegram_source() {
-  local repo_root checkout origin_url expected_url current_head previous_remote_head
+  local repo_root checkout origin_url expected_url
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   checkout="$(dirname "${repo_root}")/TelegramAndroid"
   expected_url="https://github.com/DrKLO/Telegram.git"
@@ -206,36 +212,19 @@ ensure_telegram_source() {
     return 1
   fi
 
-  if [[ -n "$(git -C "${checkout}" status --porcelain --untracked-files=no)" ]]; then
-    echo "Telegram source has tracked local changes; skipping update"
-    return 0
-  fi
-
-  current_head="$(git -C "${checkout}" rev-parse HEAD)"
-  previous_remote_head="$(git -C "${checkout}" rev-parse refs/remotes/origin/master 2>/dev/null || true)"
-  if [[ -z "${previous_remote_head}" ]]; then
-    echo "Telegram source has no origin/master reference; skipping update"
-    return 0
-  fi
-  if [[ "${current_head}" != "${previous_remote_head}" ]]; then
-    echo "Telegram source is not at the previously fetched origin/master; skipping update"
-    return 0
-  fi
-
-  git -C "${checkout}" fetch --depth 1 origin master
-  git -C "${checkout}" checkout -B master origin/master
-  echo "Telegram source ready at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
+  echo "Telegram source already available at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
 }
 
 step "Check apt packages" ensure_apt_packages
 step "Install Determinate Nix" install_nix
 source_nix
 step "Ensure nix-daemon" ensure_nix_daemon
+step "Expose Nix CLI" ensure_nix_on_path
 step "Add login-shell Nix hook" ensure_login_shell_hook
 step "Write orb agent guidance" write_orb_guidance
-step "Clone or update Telegram source" ensure_telegram_source
+step "Ensure Telegram source" ensure_telegram_source
 step "Realize Nix development shell" realize_dev_shell
-step "Warm Gradle wrapper" warm_gradle_wrapper
+step "Warm Gradle project" warm_gradle_project
 
 echo "MxGram orb setup complete"
 echo "nix=$(nix_bin) ($(nix --version 2>/dev/null || "$(nix_bin)" --version))"

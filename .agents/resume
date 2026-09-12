@@ -26,6 +26,33 @@ else
   exit 1
 fi
 
+# Amp may append its environment loader after setup. Keep the repository-scoped Nix hook last so
+# PATH values loaded by Amp cannot replace the development shell's toolchain paths.
+profile_file="${HOME}/.bash_profile"
+begin_marker="# mxgram Nix development shell"
+end_marker="# end mxgram Nix development shell"
+last_nonblank="$(awk 'NF { line = $0 } END { print line }' "${profile_file}" 2>/dev/null || true)"
+if [[ "${last_nonblank}" != "${end_marker}" ]] &&
+  grep -Fqx "${begin_marker}" "${profile_file}" 2>/dev/null &&
+  grep -Fqx "${end_marker}" "${profile_file}" 2>/dev/null; then
+  hook="$(
+    awk -v begin="${begin_marker}" -v end="${end_marker}" '
+      $0 == begin { in_hook = 1 }
+      in_hook { print }
+      $0 == end { exit }
+    ' "${profile_file}"
+  )"
+  tmp="$(mktemp)"
+  awk -v begin="${begin_marker}" -v end="${end_marker}" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "${profile_file}" >"${tmp}"
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "${tmp}"
+  printf '\n%s\n' "${hook}" >>"${tmp}"
+  mv "${tmp}" "${profile_file}"
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 telegram_source="$(dirname "${repo_root}")/TelegramAndroid"
 if ! git -C "${telegram_source}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
