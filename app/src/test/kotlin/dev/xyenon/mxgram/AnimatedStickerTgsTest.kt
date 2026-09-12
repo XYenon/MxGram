@@ -82,9 +82,9 @@ class AnimatedStickerTgsTest {
 
         for (index in 0 until metadata.frameCount) {
             val chunk = frameChunk(index)
-            assertEquals("VP8L", chunk.first)
+            assertEquals("VP8L", chunk.codecFourCc)
             assertTrue(WebpCodecChunks.hasAlpha(chunk))
-            val dimensions = checkNotNull(WebpCodecChunks.readVp8lDimensions(chunk.second))
+            val dimensions = checkNotNull(WebpCodecChunks.readVp8lDimensions(chunk.codecPayload))
             assertEquals(metadata.width, dimensions.first)
             assertEquals(metadata.height, dimensions.second)
         }
@@ -95,15 +95,15 @@ class AnimatedStickerTgsTest {
         val metadata = metadata()
         val payloadHashes =
             (0 until metadata.frameCount)
-                .map { frameChunk(it).second.contentHashCode() }
+                .map { frameChunk(it).codecPayload.contentHashCode() }
                 .toSet()
 
         assertTrue(
             "Expected multiple visually distinct frames, got ${payloadHashes.size}",
             payloadHashes.size >= 3,
         )
-        assertTrue(payloadHashes.contains(frameChunk(0).second.contentHashCode()))
-        assertTrue(payloadHashes.contains(frameChunk(metadata.frameCount - 1).second.contentHashCode()))
+        assertTrue(payloadHashes.contains(frameChunk(0).codecPayload.contentHashCode()))
+        assertTrue(payloadHashes.contains(frameChunk(metadata.frameCount - 1).codecPayload.contentHashCode()))
     }
 
     @Test
@@ -139,7 +139,7 @@ class AnimatedStickerTgsTest {
 
     private fun metadata() = checkNotNull(TgsStickerProbe.readMetadata(fixture()))
 
-    private fun frameChunk(index: Int): Pair<String, ByteArray> {
+    private fun frameChunk(index: Int): WebpFrame {
         val frameResource = "animated-sticker-frames/frame-${index.toString().padStart(2, '0')}.webp"
         return checkNotNull(WebpCodecChunks.extractFromSingleImageWebp(TestFixtures.resource(frameResource).readBytes()))
     }

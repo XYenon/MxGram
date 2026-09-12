@@ -40,7 +40,6 @@ internal object AnimatedWebpEncoder {
             height = height,
             frameDurationMs = frameDurationMs.coerceAtLeast(1),
             frameChunks = frameChunks,
-            hasAlpha = frames.any { it.hasAlpha() },
             outputPath = outputPath,
         )
     }
@@ -49,9 +48,8 @@ internal object AnimatedWebpEncoder {
         width: Int,
         height: Int,
         frameDurationMs: Int,
-        frameChunks: List<Pair<String, ByteArray>>,
+        frameChunks: List<WebpFrame>,
         outputPath: String,
-        hasAlpha: Boolean = frameChunks.any { WebpCodecChunks.hasAlpha(it) },
     ): Boolean {
         if (width <= 0 || height <= 0 || frameChunks.isEmpty()) {
             return false
@@ -61,7 +59,6 @@ internal object AnimatedWebpEncoder {
             height = height,
             frameDurationMs = frameDurationMs.coerceAtLeast(1),
             frameChunks = frameChunks,
-            hasAlpha = hasAlpha,
             outputPath = outputPath,
         )
     }
@@ -70,15 +67,14 @@ internal object AnimatedWebpEncoder {
         width: Int,
         height: Int,
         frameDurationMs: Int,
-        frameChunks: List<Pair<String, ByteArray>>,
-        hasAlpha: Boolean,
+        frameChunks: List<WebpFrame>,
         outputPath: String,
     ): Boolean {
         val webpPayload = ByteArrayOutputStream()
-        webpPayload.write(buildVp8xChunk(width, height, hasAlpha))
+        webpPayload.write(buildVp8xChunk(width, height, frameChunks.any(WebpCodecChunks::hasAlpha)))
         webpPayload.write(buildAnimChunk())
-        for ((codec, payload) in frameChunks) {
-            webpPayload.write(buildAnmfChunk(width, height, frameDurationMs, codec, payload))
+        for (frame in frameChunks) {
+            webpPayload.write(buildAnmfChunk(width, height, frameDurationMs, frame))
         }
 
         val riffPayload = ByteArrayOutputStream()
@@ -120,8 +116,7 @@ internal object AnimatedWebpEncoder {
         width: Int,
         height: Int,
         frameDurationMs: Int,
-        codecFourCc: String,
-        codecPayload: ByteArray,
+        frame: WebpFrame,
     ): ByteArray {
         val payload = ByteArrayOutputStream()
         writeUint24(payload, 0)
@@ -130,7 +125,8 @@ internal object AnimatedWebpEncoder {
         writeUint24(payload, height - 1)
         writeUint24(payload, frameDurationMs)
         payload.write(ANMF_DISPOSE_TO_BACKGROUND)
-        payload.write(wrapChunk(codecFourCc, codecPayload))
+        frame.alphaPayload?.let { alpha -> payload.write(wrapChunk("ALPH", alpha)) }
+        payload.write(wrapChunk(frame.codecFourCc, frame.codecPayload))
         return wrapChunk("ANMF", payload.toByteArray())
     }
 

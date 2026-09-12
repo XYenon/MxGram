@@ -1,9 +1,16 @@
 package dev.xyenon.mxgram
 
 import android.app.Activity
+import android.content.Context
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.PopupWindow
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
+import kotlin.math.max
+import kotlin.math.min
 
 internal const val OPTION_SAVE_STICKER = 0x4D584702 // "MXG\u0002"
 private const val CONTENT_TYPE_STICKER = 0
@@ -14,6 +21,8 @@ internal class StickerDownloadMenu(
 ) {
     @Volatile
     private var previewTarget: PreviewTarget? = null
+    private val previewMenuItems = WeakHashMap<ViewGroup, WeakReference<View>>()
+    private val ownedPreviewPopups = WeakHashMap<Any, WeakReference<Any>>()
 
     @Suppress("UNCHECKED_CAST")
     fun addToMessageMenu(
@@ -107,8 +116,7 @@ internal class StickerDownloadMenu(
             if (contentType != CONTENT_TYPE_STICKER) {
                 return
             }
-            val menuVisible = findField(viewer.javaClass, "menuVisible").getBoolean(viewer)
-            if (!menuVisible) {
+            if (findField(viewer.javaClass, "isPhotoEditor").getBoolean(viewer)) {
                 return
             }
             val currentDocument = findField(viewer.javaClass, "currentDocument").get(viewer) ?: return
@@ -117,48 +125,303 @@ internal class StickerDownloadMenu(
             if (invokeStaticBoolean(messageObjectClass, "isMaskDocument", arrayOf(currentDocument))) {
                 return
             }
-            val popupWindow = findField(viewer.javaClass, "popupWindow").get(viewer) ?: return
-            val previewMenu =
-                findMethod(popupWindow.javaClass, "getContentView").invoke(popupWindow) as? View
-                    ?: findField(viewer.javaClass, "popupLayout").get(viewer) as? View
-                    ?: return
             val activity = findField(viewer.javaClass, "parentActivity").get(viewer) as? Activity ?: return
             val account = findField(viewer.javaClass, "currentAccount").getInt(viewer)
             val containerView = findField(viewer.javaClass, "containerView").get(viewer) as? FrameLayout ?: return
-            val label = resolveSaveToGalleryLabel(classLoader)
-            val galleryIcon = resolveTelegramDrawable(classLoader, "msg_gallery", 0)
-            val actionBarMenuItemClass = Class.forName("org.telegram.ui.ActionBar.ActionBarMenuItem", false, classLoader)
             val resourcesProvider = findField(viewer.javaClass, "resourcesProvider").get(viewer)
-            val addItem =
-                actionBarMenuItemClass.declaredMethods.firstOrNull { method ->
-                    method.name == "addItem" &&
-                        method.parameterCount == 5 &&
-                        ViewGroup::class.java.isAssignableFrom(method.parameterTypes[0])
-                } ?: return
-            addItem.isAccessible = true
-            val item =
-                addItem.invoke(
-                    null,
+            val popupWindow = findField(viewer.javaClass, "popupWindow").get(viewer)
+            if (popupWindow != null) {
+                val previewMenu =
+                    findMethod(popupWindow.javaClass, "getContentView").invoke(popupWindow) as? ViewGroup
+                        ?: return
+                addPreviewSaveItem(
                     previewMenu,
-                    galleryIcon,
-                    label,
-                    false,
+                    activity,
+                    currentDocument,
+                    classLoader,
+                    account,
+                    containerView,
                     resourcesProvider,
-                ) as? View ?: return
-            item.setOnClickListener {
-                if (!hasGalleryWritePermission(activity)) {
-                    requestGalleryWritePermission(activity)
-                    return@setOnClickListener
-                }
-                stickerSaver.saveDocumentSticker(activity, currentDocument, classLoader, account) {
-                    showDownloadBulletin(containerView, resourcesProvider)
-                }
-                dismissPreviewPopup(viewer)
+                ) { dismissPreviewPopup(viewer) }
+                return
+            }
+
+            val menuVisible = findField(viewer.javaClass, "menuVisible").getBoolean(viewer)
+            if (menuVisible &&
+                addPremiumPreviewSaveItem(
+                    viewer,
+                    activity,
+                    currentDocument,
+                    classLoader,
+                    account,
+                    containerView,
+                    resourcesProvider,
+                )
+            ) {
+                return
+            }
+            if (!menuVisible) {
+                createSaveOnlyPreviewPopup(
+                    viewer,
+                    activity,
+                    currentDocument,
+                    classLoader,
+                    account,
+                    containerView,
+                    resourcesProvider,
+                )
             }
         } catch (t: Throwable) {
             logError("Failed to patch sticker preview menu", t)
         }
     }
+
+    private fun addPremiumPreviewSaveItem(
+        viewer: Any,
+        activity: Activity,
+        document: Any,
+        classLoader: ClassLoader,
+        account: Int,
+        containerView: FrameLayout,
+        resourcesProvider: Any?,
+    ): Boolean {
+        val unlockView = findField(viewer.javaClass, "unlockPremiumView").get(viewer) ?: return false
+        val premiumButton = findField(unlockView.javaClass, "premiumButtonView").get(unlockView) as? View ?: return false
+        val host = premiumButton.parent as? ViewGroup ?: return false
+        val item =
+            addPreviewSaveItem(
+                host,
+                activity,
+                document,
+                classLoader,
+                account,
+                containerView,
+                resourcesProvider,
+            ) { findMethod(viewer.javaClass, "closeWithMenu").invoke(viewer) } ?: return false
+        if (host.indexOfChild(item) != 0) {
+            val layoutParams = item.layoutParams
+            host.removeView(item)
+            host.addView(item, 0, layoutParams)
+        }
+        return true
+    }
+
+    private fun addPreviewSaveItem(
+        host: ViewGroup,
+        activity: Activity,
+        document: Any,
+        classLoader: ClassLoader,
+        account: Int,
+        containerView: FrameLayout,
+        resourcesProvider: Any?,
+        closeMenu: () -> Unit,
+    ): View? {
+        val existing = previewMenuItems[host]?.get()?.takeIf { it.parent != null }
+        val item =
+            existing ?: run {
+                val actionBarMenuItemClass =
+                    Class.forName("org.telegram.ui.ActionBar.ActionBarMenuItem", false, classLoader)
+                val addItem =
+                    actionBarMenuItemClass.declaredMethods.firstOrNull { method ->
+                        method.name == "addItem" &&
+                            method.parameterCount == 5 &&
+                            ViewGroup::class.java.isAssignableFrom(method.parameterTypes[0])
+                    } ?: return null
+                addItem.isAccessible = true
+                val created =
+                    addItem.invoke(
+                        null,
+                        host,
+                        resolveTelegramDrawable(classLoader, "msg_gallery", 0),
+                        resolveSaveToGalleryLabel(classLoader),
+                        false,
+                        resourcesProvider,
+                    ) as? View ?: return null
+                previewMenuItems[host] = WeakReference(created)
+                created
+            }
+        item.setOnClickListener {
+            if (!hasGalleryWritePermission(activity)) {
+                requestGalleryWritePermission(activity)
+                return@setOnClickListener
+            }
+            stickerSaver.saveDocumentSticker(activity, document, classLoader, account) {
+                showDownloadBulletin(containerView, resourcesProvider)
+            }
+            closeMenu()
+        }
+        return item
+    }
+
+    private fun createSaveOnlyPreviewPopup(
+        viewer: Any,
+        activity: Activity,
+        document: Any,
+        classLoader: ClassLoader,
+        account: Int,
+        containerView: FrameLayout,
+        resourcesProvider: Any?,
+    ) {
+        if (findField(viewer.javaClass, "isVisible").getBoolean(viewer).not()) {
+            return
+        }
+        val resourcesProviderClass =
+            Class.forName("org.telegram.ui.ActionBar.Theme\$ResourcesProvider", false, classLoader)
+        val layoutClass =
+            Class.forName(
+                "org.telegram.ui.ActionBar.ActionBarPopupWindow\$ActionBarPopupWindowLayout",
+                false,
+                classLoader,
+            )
+        val previewMenu =
+            layoutClass
+                .getConstructor(
+                    Context::class.java,
+                    java.lang.Integer.TYPE,
+                    resourcesProviderClass,
+                    java.lang.Integer.TYPE,
+                ).newInstance(
+                    containerView.context,
+                    resolveTelegramDrawable(classLoader, "popup_fixed_alert4", 0),
+                    resourcesProvider,
+                    0,
+                ) as? ViewGroup ?: return
+        addPreviewSaveItem(
+            previewMenu,
+            activity,
+            document,
+            classLoader,
+            account,
+            containerView,
+            resourcesProvider,
+        ) { dismissPreviewPopup(viewer) } ?: return
+
+        val popupClass = Class.forName("org.telegram.ui.ActionBar.ActionBarPopupWindow", false, classLoader)
+        val popup =
+            popupClass
+                .getConstructor(View::class.java, java.lang.Integer.TYPE, java.lang.Integer.TYPE)
+                .newInstance(previewMenu, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        findField(viewer.javaClass, "popupWindow").set(viewer, popup)
+        findField(viewer.javaClass, "menuVisible").setBoolean(viewer, true)
+        ownedPreviewPopups[popup] = WeakReference(viewer)
+        try {
+            findMethod(popupClass, "setPauseNotifications", java.lang.Boolean.TYPE).invoke(popup, true)
+            findMethod(popupClass, "setDismissAnimationDuration", java.lang.Integer.TYPE).invoke(popup, 100)
+            findMethod(popupClass, "setScaleOut", java.lang.Boolean.TYPE).invoke(popup, true)
+            findMethod(popupClass, "setOutsideTouchable", java.lang.Boolean.TYPE).invoke(popup, true)
+            findMethod(popupClass, "setClippingEnabled", java.lang.Boolean.TYPE).invoke(popup, true)
+            findMethod(popupClass, "setAnimationStyle", java.lang.Integer.TYPE)
+                .invoke(popup, resolveTelegramStyle(classLoader, "PopupContextAnimation"))
+            findMethod(popupClass, "setFocusable", java.lang.Boolean.TYPE).invoke(popup, true)
+            previewMenu.measure(
+                View.MeasureSpec.makeMeasureSpec(dp(classLoader, 1000f), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(dp(classLoader, 1000f), View.MeasureSpec.AT_MOST),
+            )
+            findMethod(popupClass, "setInputMethodMode", java.lang.Integer.TYPE)
+                .invoke(popup, PopupWindow.INPUT_METHOD_NOT_NEEDED)
+            previewMenu.isFocusableInTouchMode = true
+            val y = previewPopupY(viewer, containerView, classLoader)
+            val x = (containerView.measuredWidth - previewMenu.measuredWidth) / 2
+            findMethod(
+                popupClass,
+                "showAtLocation",
+                View::class.java,
+                java.lang.Integer.TYPE,
+                java.lang.Integer.TYPE,
+                java.lang.Integer.TYPE,
+            ).invoke(popup, containerView, 0, x, y)
+            runCatching { containerView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+            containerView.invalidate()
+        } catch (t: Throwable) {
+            ownedPreviewPopups.remove(popup)
+            findField(viewer.javaClass, "popupWindow").set(viewer, null)
+            findField(viewer.javaClass, "menuVisible").setBoolean(viewer, false)
+            runCatching { findMethod(popupClass, "dismiss").invoke(popup) }
+            throw t
+        }
+    }
+
+    private fun previewPopupY(
+        viewer: Any,
+        containerView: FrameLayout,
+        classLoader: ClassLoader,
+    ): Int {
+        val insets = findField(viewer.javaClass, "lastInsets").get(viewer)
+        val insetTop = findField(insets.javaClass, "top").getInt(insets)
+        val insetBottom = findField(insets.javaClass, "bottom").getInt(insets)
+        val moveY = findField(viewer.javaClass, "moveY").getFloat(viewer)
+        val keyboardHeight = findField(viewer.javaClass, "keyboardHeight").getInt(viewer)
+        val drawEffect = findField(viewer.javaClass, "drawEffect").getBoolean(viewer)
+        val size =
+            if (drawEffect) {
+                min(containerView.width, containerView.height - insetTop - insetBottom) - dp(classLoader, 40f)
+            } else {
+                (min(containerView.width, containerView.height - insetTop - insetBottom) / 1.8f).toInt()
+            }
+        val emojiOffset =
+            if (findField(viewer.javaClass, "stickerEmojiLayout").get(viewer) != null) dp(classLoader, 40f) else 0
+        var y =
+            (
+                moveY +
+                    max(
+                        size / 2 + insetTop + emojiOffset,
+                        (containerView.height - insetTop - insetBottom - keyboardHeight) / 2,
+                    ) + size / 2
+            ).toInt()
+        y += dp(classLoader, 24f)
+        if (drawEffect) {
+            y += dp(classLoader, 24f)
+        }
+        return y
+    }
+
+    fun handlePreviewPopupDismissed(popupWindow: Any) {
+        val viewer = ownedPreviewPopups.remove(popupWindow)?.get() ?: return
+        try {
+            val popupField = findField(viewer.javaClass, "popupWindow")
+            if (popupField.get(viewer) !== popupWindow) {
+                return
+            }
+            popupField.set(viewer, null)
+            findField(viewer.javaClass, "menuVisible").setBoolean(viewer, false)
+            if (!findField(viewer.javaClass, "closeOnDismiss").getBoolean(viewer)) {
+                return
+            }
+            val currentPreviewCellField = findField(viewer.javaClass, "currentPreviewCell")
+            val currentPreviewCell = currentPreviewCellField.get(viewer)
+            if (currentPreviewCell != null) {
+                runCatching {
+                    findMethod(currentPreviewCell.javaClass, "setScaled", java.lang.Boolean.TYPE)
+                        .invoke(currentPreviewCell, false)
+                }
+                currentPreviewCellField.set(viewer, null)
+            }
+            findMethod(viewer.javaClass, "close").invoke(viewer)
+        } catch (t: Throwable) {
+            logError("Failed to clean up sticker preview popup", t)
+        }
+    }
+
+    private fun dp(
+        classLoader: ClassLoader,
+        value: Float,
+    ): Int {
+        val androidUtilities = Class.forName("org.telegram.messenger.AndroidUtilities", false, classLoader)
+        return androidUtilities.getMethod("dp", java.lang.Float.TYPE).invoke(null, value) as Int
+    }
+
+    private fun resolveTelegramStyle(
+        classLoader: ClassLoader,
+        name: String,
+    ): Int =
+        try {
+            Class
+                .forName("org.telegram.messenger.R\$style", false, classLoader)
+                .getDeclaredField(name)
+                .getInt(null)
+        } catch (_: Throwable) {
+            0
+        }
 
     private fun dismissPreviewPopup(viewer: Any) {
         try {

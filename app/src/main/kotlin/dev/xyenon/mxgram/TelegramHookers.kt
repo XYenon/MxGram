@@ -197,6 +197,15 @@ class ContentPreviewShowSheetHooker : XposedInterface.Hooker {
     }
 }
 
+class PreviewPopupDismissHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        val result = chain.proceed()
+        val popupWindow = chain.thisObject ?: return result
+        TelegramHooksModule.currentModule().handlePreviewPopupDismissed(popupWindow)
+        return result
+    }
+}
+
 class ProfileCreateViewHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()

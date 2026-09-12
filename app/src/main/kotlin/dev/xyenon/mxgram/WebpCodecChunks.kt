@@ -4,8 +4,14 @@ import android.graphics.Bitmap
 import android.os.Build
 import java.io.ByteArrayOutputStream
 
+internal data class WebpFrame(
+    val codecFourCc: String,
+    val codecPayload: ByteArray,
+    val alphaPayload: ByteArray? = null,
+)
+
 internal object WebpCodecChunks {
-    fun encodeFrame(bitmap: Bitmap): Pair<String, ByteArray>? {
+    fun encodeFrame(bitmap: Bitmap): WebpFrame? {
         val formats =
             buildList {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -39,33 +45,79 @@ internal object WebpCodecChunks {
         return width to height
     }
 
-    fun hasAlpha(chunk: Pair<String, ByteArray>): Boolean {
-        val (codec, payload) = chunk
-        if (codec != "VP8L" || payload.isEmpty()) {
+    fun hasAlpha(frame: WebpFrame): Boolean {
+        if (frame.alphaPayload != null) {
+            return true
+        }
+        val payload = frame.codecPayload
+        if (frame.codecFourCc != "VP8L" || payload.size < 5) {
             return false
         }
         return payload[0] == 0x2f.toByte() && (payload[4].toInt() and 0x10) != 0
     }
 
-    fun extractFromSingleImageWebp(webpFile: ByteArray): Pair<String, ByteArray>? {
+    fun extractFromSingleImageWebp(webpFile: ByteArray): WebpFrame? {
         if (webpFile.size < 12 || !webpFile.hasFourCc(0, "RIFF") || !webpFile.hasFourCc(8, "WEBP")) {
             return null
         }
+        val riffEnd = webpFile.readLe32Unsigned(4) + 8L
+        if (riffEnd < 12L || riffEnd > webpFile.size.toLong()) {
+            return null
+        }
+        val limit = riffEnd.toInt()
         var offset = 12
-        while (offset + 8 <= webpFile.size) {
+        var alphaPayload: ByteArray? = null
+        var codecFourCc: String? = null
+        var codecPayload: ByteArray? = null
+        var sawVp8x = false
+        while (offset + 8 <= limit) {
             val fourCc = webpFile.fourCcAt(offset)
-            val size = webpFile.readLe32(offset + 4)
+            val size = webpFile.readLe32Unsigned(offset + 4)
             val payloadStart = offset + 8
-            val payloadEnd = payloadStart + size
-            if (payloadEnd > webpFile.size) {
+            val payloadEnd = payloadStart.toLong() + size
+            val paddedEnd = payloadEnd + (size and 1L)
+            if (payloadEnd > limit || paddedEnd > limit) {
                 return null
             }
-            if (fourCc == "VP8L" || fourCc == "VP8 ") {
-                return fourCc to webpFile.copyOfRange(payloadStart, payloadEnd)
+            val end = payloadEnd.toInt()
+            when (fourCc) {
+                "VP8X" -> {
+                    if (sawVp8x || alphaPayload != null || codecFourCc != null) {
+                        return null
+                    }
+                    sawVp8x = true
+                }
+
+                "ALPH" -> {
+                    if (alphaPayload != null || codecFourCc != null) {
+                        return null
+                    }
+                    alphaPayload = webpFile.copyOfRange(payloadStart, end)
+                }
+
+                "VP8 ", "VP8L" -> {
+                    if (codecFourCc != null || (fourCc == "VP8L" && alphaPayload != null)) {
+                        return null
+                    }
+                    val payload = webpFile.copyOfRange(payloadStart, end)
+                    if (fourCc == "VP8L" && (payload.size < 5 || payload[0] != 0x2f.toByte())) {
+                        return null
+                    }
+                    codecFourCc = fourCc
+                    codecPayload = payload
+                }
             }
-            offset = payloadEnd + (size and 1)
+            offset = paddedEnd.toInt()
         }
-        return null
+        if (offset != limit) {
+            return null
+        }
+        val codec = codecFourCc ?: return null
+        val payload = codecPayload ?: return null
+        if (alphaPayload != null && codec != "VP8 ") {
+            return null
+        }
+        return WebpFrame(codec, payload, alphaPayload)
     }
 
     private fun ByteArray.readLe32(offset: Int): Int =
@@ -73,6 +125,8 @@ internal object WebpCodecChunks {
             ((this[offset + 1].toInt() and 0xff) shl 8) or
             ((this[offset + 2].toInt() and 0xff) shl 16) or
             ((this[offset + 3].toInt() and 0xff) shl 24)
+
+    private fun ByteArray.readLe32Unsigned(offset: Int): Long = readLe32(offset).toLong() and 0xffff_ffffL
 
     private fun ByteArray.fourCcAt(offset: Int): String = String(this, offset, 4)
 

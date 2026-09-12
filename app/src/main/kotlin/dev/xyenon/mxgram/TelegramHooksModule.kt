@@ -240,6 +240,12 @@ class TelegramHooksModule : XposedModule() {
             val getInstance = contentPreviewViewerClass.getDeclaredMethod("getInstance")
             getInstance.isAccessible = true
             hook(getInstance).intercept(ContentPreviewGetInstanceHooker())
+
+            val popupWindowClass =
+                Class.forName("org.telegram.ui.ActionBar.ActionBarPopupWindow", false, classLoader)
+            val dismiss = popupWindowClass.getDeclaredMethod("dismiss")
+            dismiss.isAccessible = true
+            hook(dismiss).intercept(PreviewPopupDismissHooker())
         } catch (t: Throwable) {
             logError("Failed to install sticker preview menu hook", t)
         }
@@ -460,6 +466,10 @@ class TelegramHooksModule : XposedModule() {
 
     internal fun patchContentPreviewStickerMenu(runnable: Any) {
         stickerDownloadMenu.patchContentPreviewStickerMenu(runnable)
+    }
+
+    internal fun handlePreviewPopupDismissed(popupWindow: Any) {
+        stickerDownloadMenu.handlePreviewPopupDismissed(popupWindow)
     }
 
     internal fun installProfileIdDisplay(profileActivity: Any) {

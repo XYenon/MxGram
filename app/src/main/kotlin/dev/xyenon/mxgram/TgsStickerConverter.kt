@@ -89,7 +89,7 @@ internal class TgsStickerConverter(
             invokeMethod(drawable, "prepareForGenerateCache")
             findMethod(drawable.javaClass, "setGeneratingFrame", Int::class.javaPrimitiveType!!).invoke(drawable, 0)
             val scratch = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val frameChunks = ArrayList<Pair<String, ByteArray>>()
+            val frameChunks = ArrayList<WebpFrame>()
             try {
                 while (true) {
                     scratch.eraseColor(0)
@@ -155,7 +155,7 @@ internal class TgsStickerConverter(
         val width: Int,
         val height: Int,
         val fps: Int,
-        val frameChunks: List<Pair<String, ByteArray>>,
+        val frameChunks: List<WebpFrame>,
     )
 
     companion object {
