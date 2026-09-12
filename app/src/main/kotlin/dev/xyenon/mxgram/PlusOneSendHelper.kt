@@ -163,24 +163,12 @@ internal fun invokeProcessForwardFromMyName(
                 null
             }
 
-        if (replyToMsgOverride != null) {
-            val replyField = findField(messageObject.javaClass, "replyMessageObject")
-            val previousReply = replyField.get(messageObject)
-            try {
-                replyField.set(messageObject, replyToMsgOverride)
-                processForwardFromMyName.isAccessible = true
-                processForwardFromMyName.invoke(
-                    sendMessagesHelper,
-                    messageObject,
-                    dialogId,
-                    0L,
-                    monoForumPeer,
-                    suggestionParams,
-                )
-            } finally {
-                replyField.set(messageObject, previousReply)
-            }
-        } else {
+        val replyField = findField(messageObject.javaClass, "replyMessageObject")
+        val previousReply = replyField.get(messageObject)
+        try {
+            // processForwardFromMyName copies this field into the outgoing message. A regular tap
+            // must clear it; only a long press supplies a non-null override.
+            replyField.set(messageObject, replyToMsgOverride)
             processForwardFromMyName.isAccessible = true
             processForwardFromMyName.invoke(
                 sendMessagesHelper,
@@ -190,6 +178,8 @@ internal fun invokeProcessForwardFromMyName(
                 monoForumPeer,
                 suggestionParams,
             )
+        } finally {
+            replyField.set(messageObject, previousReply)
         }
         true
     } catch (t: Throwable) {

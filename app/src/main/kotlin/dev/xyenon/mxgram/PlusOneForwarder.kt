@@ -89,15 +89,6 @@ internal class PlusOneForwarder(
             val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return
             val shouldRepeatWithoutForwarding =
                 shouldRepeatPlusOneWithoutForwardHeader(chatActivity, selectedObject)
-            if (replyRepeater.tryRepeatPendingOrForced(
-                    chatActivity,
-                    selectedObject,
-                    shouldRepeatWithoutForwarding,
-                )
-            ) {
-                return
-            }
-
             val selectedObjectGroup =
                 findField(chatActivity.javaClass, "selectedObjectGroup").get(chatActivity)
 
@@ -114,8 +105,13 @@ internal class PlusOneForwarder(
                 return
             }
 
-            if (shouldRepeatWithoutForwarding) {
-                repeatMessagesFromMyName(chatActivity, messages)
+            if (replyRepeater.tryRepeatPendingOrForced(
+                    chatActivity,
+                    selectedObject,
+                    messages,
+                    shouldRepeatWithoutForwarding,
+                )
+            ) {
                 return
             }
 
@@ -149,13 +145,6 @@ internal class PlusOneForwarder(
         } catch (t: Throwable) {
             logError("Failed to +1 forward message", t)
         }
-    }
-
-    private fun repeatMessagesFromMyName(
-        chatActivity: Any,
-        messages: ArrayList<Any>,
-    ) {
-        invokeProcessForwardFromMyNameBatch(chatActivity, messages, logError)
     }
 
     /** The final three arguments are the parallel icon, label, and option lists. */
