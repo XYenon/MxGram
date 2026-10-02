@@ -103,19 +103,48 @@ private fun isInvocationCompatible(
 @Throws(NoSuchFieldException::class)
 internal fun findField(
     type: Class<*>,
-    name: String,
+    vararg names: String,
 ): Field {
-    var current: Class<*>? = type
-    while (current != null) {
-        try {
-            val field = current.getDeclaredField(name)
-            field.isAccessible = true
-            return field
-        } catch (_: NoSuchFieldException) {
-            current = current.superclass
+    for (name in names) {
+        var current: Class<*>? = type
+        while (current != null) {
+            try {
+                val field = current.getDeclaredField(name)
+                field.isAccessible = true
+                return field
+            } catch (_: NoSuchFieldException) {
+                current = current.superclass
+            }
         }
     }
-    throw NoSuchFieldException(type.name + '#' + name)
+    throw NoSuchFieldException(type.name + '#' + names.joinToString("/"))
+}
+
+internal fun findFieldOrNull(
+    type: Class<*>,
+    vararg names: String,
+): Field? =
+    try {
+        findField(type, *names)
+    } catch (_: Throwable) {
+        null
+    }
+
+internal fun findFieldByTypeOrNull(
+    type: Class<*>,
+    fieldType: Class<*>,
+): Field? {
+    var current: Class<*>? = type
+    while (current != null) {
+        for (field in current.declaredFields) {
+            if (fieldType.isAssignableFrom(field.type)) {
+                field.isAccessible = true
+                return field
+            }
+        }
+        current = current.superclass
+    }
+    return null
 }
 
 /**
@@ -135,7 +164,13 @@ internal fun findDeclaredMethodByNameAndArity(
     return type.declaredMethods
         .filter { method -> method.name == name && method.parameterCount in allowed }
         .maxByOrNull { it.parameterCount }
+        ?.also { it.isAccessible = true }
 }
+
+internal fun findDeclaredMethodByPredicate(
+    type: Class<*>,
+    predicate: (Method) -> Boolean,
+): Method? = type.declaredMethods.singleOrNull(predicate)?.also { it.isAccessible = true }
 
 @Throws(NoSuchMethodException::class)
 internal fun findMethod(
@@ -154,4 +189,26 @@ internal fun findMethod(
         }
     }
     throw NoSuchMethodException(type.name + '#' + name)
+}
+
+internal fun findMethodOrNull(
+    type: Class<*>,
+    name: String,
+    vararg parameterTypes: Class<*>,
+): Method? =
+    try {
+        findMethod(type, name, *parameterTypes)
+    } catch (_: Throwable) {
+        null
+    }
+
+internal fun findMethodByNamesOrNull(
+    type: Class<*>,
+    vararg names: String,
+): Method? {
+    for (name in names) {
+        val m = findMethodOrNull(type, name)
+        if (m != null) return m
+    }
+    return null
 }

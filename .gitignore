@@ -3,6 +3,7 @@
 .direnv/
 .gradle/
 .idea/
+AGENTS.local.md
 app/build/
 build/
 local.properties
