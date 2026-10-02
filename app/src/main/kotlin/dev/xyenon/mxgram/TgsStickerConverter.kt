@@ -37,6 +37,10 @@ internal class TgsStickerConverter(
                 )
                 return null
             }
+            android.util.Log.i(
+                "MxGram",
+                "Converted TGS to Animated WebP: $path -> $outputPath (${frames.frameChunks.size} frames, ${outputFile.length()} bytes)",
+            )
             outputPath
         } catch (t: Throwable) {
             logError("Failed to convert TGS sticker to animated WebP", t)
@@ -67,17 +71,8 @@ internal class TgsStickerConverter(
             workingFile = temporaryFile
             sourceFile.copyTo(temporaryFile, overwrite = true)
 
-            val cacheOptionsClass =
-                Class.forName("org.telegram.messenger.utils.BitmapsCache\$CacheOptions", false, classLoader)
-            val cacheOptions = cacheOptionsClass.getDeclaredConstructor().newInstance()
-            val lottieClass = Class.forName("org.telegram.ui.Components.RLottieDrawable", false, classLoader)
-            drawable =
-                createLottieDrawable(
-                    lottieClass,
-                    cacheOptionsClass,
-                    cacheOptions,
-                    temporaryFile.absolutePath,
-                )
+            val lottieClass = TelegramObfuscationResolver.resolveRLottieDrawable(classLoader)
+            drawable = createLottieDrawable(lottieClass, temporaryFile.absolutePath)
 
             val width = invokeMethod(drawable, "getIntrinsicWidth") as? Int ?: return null
             val height = invokeMethod(drawable, "getIntrinsicHeight") as? Int ?: return null
@@ -85,15 +80,19 @@ internal class TgsStickerConverter(
                 return null
             }
             val fps = readStickerFps(drawable)
-            invokeMethod(drawable, "setAllowDrawFramesWhileCacheGenerating", true)
-            invokeMethod(drawable, "prepareForGenerateCache")
-            findMethod(drawable.javaClass, "setGeneratingFrame", Int::class.javaPrimitiveType!!).invoke(drawable, 0)
+            runCatching { invokeMethod(drawable, "setAllowDrawFramesWhileCacheGenerating", true) }
+            invokePrepareForGenerateCache(drawable)
+            runCatching {
+                findMethodOrNull(drawable.javaClass, "setGeneratingFrame", java.lang.Integer.TYPE)
+                    ?.invoke(drawable, 0)
+            }
             val scratch = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val frameChunks = ArrayList<WebpFrame>()
+            val getNextFrameMethod = resolveGetNextFrameMethod(drawable.javaClass) ?: return null
             try {
                 while (true) {
                     scratch.eraseColor(0)
-                    if ((invokeMethod(drawable, "getNextFrame", scratch) as? Int) != 1) {
+                    if ((getNextFrameMethod.invoke(drawable, scratch) as? Int) != 1) {
                         break
                     }
                     val chunk = WebpCodecChunks.encodeFrame(scratch) ?: return null
@@ -114,12 +113,14 @@ internal class TgsStickerConverter(
             val createdDrawable = drawable
             if (createdDrawable != null) {
                 try {
-                    invokeMethod(createdDrawable, "releaseForGenerateCache")
+                    invokeReleaseForGenerateCache(createdDrawable)
                 } catch (_: Throwable) {
                 }
                 try {
-                    findMethod(createdDrawable.javaClass, "recycle", Boolean::class.javaPrimitiveType!!)
-                        .invoke(createdDrawable, false)
+                    TelegramObfuscationResolver
+                        .resolveRLottieRecycleMethod(createdDrawable.javaClass)
+                        ?.invoke(createdDrawable, false)
+                        ?: findMethodOrNull(createdDrawable.javaClass, "recycle")?.invoke(createdDrawable)
                 } catch (t: Throwable) {
                     logError("Failed to recycle RLottieDrawable", t)
                 }
@@ -130,11 +131,36 @@ internal class TgsStickerConverter(
 
     private fun readStickerFps(drawable: Any): Int =
         try {
-            val metaData = findField(drawable.javaClass, "metaData").get(drawable) as? IntArray
+            val metaData =
+                TelegramObfuscationResolver.findRLottieMetaDataField(drawable.javaClass)?.get(drawable) as? IntArray
+                    ?: findFieldOrNull(drawable.javaClass, "metaData")?.get(drawable) as? IntArray
             metaData?.getOrNull(1)?.takeIf { it > 0 } ?: DEFAULT_FPS
         } catch (_: Throwable) {
             DEFAULT_FPS
         }
+
+    private fun invokePrepareForGenerateCache(drawable: Any) {
+        val method =
+            TelegramObfuscationResolver.resolveRLottiePrepareForGenerateCacheMethod(drawable.javaClass)
+                ?: findMethodOrNull(drawable.javaClass, "prepareForGenerateCache")
+        method?.invoke(drawable)
+    }
+
+    private fun invokeReleaseForGenerateCache(drawable: Any) {
+        val method =
+            TelegramObfuscationResolver.resolveRLottieReleaseForGenerateCacheMethod(drawable.javaClass)
+                ?: findMethodOrNull(drawable.javaClass, "releaseForGenerateCache")
+        method?.invoke(drawable)
+    }
+
+    private fun resolveGetNextFrameMethod(lottieClass: Class<*>): java.lang.reflect.Method? =
+        TelegramObfuscationResolver.resolveRLottieGetNextFrameMethod(lottieClass)
+            ?: findMethodOrNull(lottieClass, "getNextFrame", Bitmap::class.java)
+            ?: lottieClass.methods.firstOrNull { method ->
+                method.parameterCount == 1 &&
+                    method.parameterTypes[0] == Bitmap::class.java &&
+                    method.returnType == java.lang.Integer.TYPE
+            }
 
     private fun invokeMethod(
         instance: Any,
@@ -165,36 +191,69 @@ internal class TgsStickerConverter(
 
 internal fun createLottieDrawable(
     lottieClass: Class<*>,
-    cacheOptionsClass: Class<*>,
-    cacheOptions: Any,
     path: String,
-): Any =
-    try {
-        val file = File(path)
-        lottieClass
-            .getConstructor(
-                File::class.java,
-                String::class.java,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                cacheOptionsClass,
-                java.lang.Boolean.TYPE,
-                IntArray::class.java,
-                Int::class.javaPrimitiveType,
-                java.lang.Boolean.TYPE,
-            ).newInstance(file, readGzippedLottieJson(file), 512, 512, cacheOptions, false, null, 0, false)
-    } catch (_: NoSuchMethodException) {
-        lottieClass
-            .getConstructor(
-                File::class.java,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                cacheOptionsClass,
-                java.lang.Boolean.TYPE,
-                IntArray::class.java,
-                Int::class.javaPrimitiveType,
-            ).newInstance(File(path), 512, 512, cacheOptions, false, null, 0)
+): Any = createLottieDrawable(lottieClass, null, null, path)
+
+internal fun createLottieDrawable(
+    lottieClass: Class<*>,
+    cacheOptionsClass: Class<*>?,
+    cacheOptions: Any?,
+    path: String,
+): Any {
+    val file = File(path)
+    val json = readGzippedLottieJson(file)
+
+    for (constructor in lottieClass.constructors) {
+        val params = constructor.parameterTypes
+        if (params.isEmpty() || params[0] != File::class.java) {
+            continue
+        }
+        val instance =
+            runCatching {
+                when (params.size) {
+                    // 9-arg: (File, String, int, int, CacheOptions, boolean, int[], int, boolean)
+                    9 -> {
+                        val options = cacheOptions ?: instantiateCacheOptions(params[4])
+                        constructor.newInstance(file, json, 512, 512, options, false, null, 0, false)
+                    }
+
+                    // 8-arg: (File, String, int, int, CacheOptions, boolean, int, boolean) - Telegram 12.10.3 (xj0)
+                    8 -> {
+                        val options = cacheOptions ?: instantiateCacheOptions(params[4])
+                        constructor.newInstance(file, json, 512, 512, options, false, 0, false)
+                    }
+
+                    // 7-arg: (File, int, int, CacheOptions, boolean, int[], int)
+                    7 -> {
+                        val options = cacheOptions ?: instantiateCacheOptions(params[3])
+                        constructor.newInstance(file, 512, 512, options, false, null, 0)
+                    }
+
+                    else -> {
+                        null
+                    }
+                }
+            }.getOrNull()
+        if (instance != null) {
+            return instance
+        }
     }
+    throw NoSuchMethodException("No matching constructor found for ${lottieClass.name}")
+}
+
+private fun instantiateCacheOptions(cacheOptionsClass: Class<*>): Any? =
+    runCatching { cacheOptionsClass.getDeclaredConstructor().newInstance() }.getOrNull()
+        ?: runCatching {
+            cacheOptionsClass.getDeclaredConstructor(java.lang.Integer.TYPE).newInstance(100)
+        }.getOrNull()
+        ?: runCatching {
+            cacheOptionsClass
+                .getDeclaredConstructor(
+                    java.lang.Integer.TYPE,
+                    java.lang.Boolean.TYPE,
+                    java.lang.Boolean.TYPE,
+                ).newInstance(100, false, false)
+        }.getOrNull()
 
 internal fun readGzippedLottieJson(file: File): String? {
     return file.inputStream().buffered().use { input ->

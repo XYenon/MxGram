@@ -1,6 +1,7 @@
 package dev.xyenon.mxgram
 
 import android.app.Activity
+import android.util.Log
 import java.io.File
 import java.lang.reflect.Proxy
 
@@ -48,6 +49,7 @@ internal class StickerSaver(
         onSaved: (() -> Unit)?,
     ) {
         if (!File(path).exists()) {
+            Log.w(TAG, "saveStickerFile: sticker file does not exist: $path")
             return
         }
         postToGlobalQueue(classLoader) {
@@ -119,8 +121,12 @@ internal class StickerSaver(
                     params[2] == java.lang.Integer.TYPE &&
                     params[5] == callbackClass &&
                     params[6] == java.lang.Boolean.TYPE
-            } ?: return
+            } ?: run {
+                Log.w(TAG, "saveToGallery: MediaController.saveFile method not found")
+                return
+            }
         saveFile.isAccessible = true
+        Log.i(TAG, "saveToGallery: saving sticker to gallery: $path ($mimeType)")
         saveFile.invoke(null, path, activity, GALLERY_SAVE_TYPE, null, mimeType, callback, true)
     }
 
@@ -233,6 +239,7 @@ internal class StickerSaver(
     }
 
     companion object {
+        private const val TAG = "MxGram"
         private const val GALLERY_SAVE_TYPE = 0
     }
 }

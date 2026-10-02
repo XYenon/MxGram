@@ -63,6 +63,20 @@ class AnimatedStickerTgsTest {
     }
 
     @Test
+    fun obfuscatedRlottieConstructor_remainsSupported() {
+        val drawable =
+            createLottieDrawable(
+                ObfuscatedRlottieDrawable::class.java,
+                FakeCacheOptions::class.java,
+                FakeCacheOptions(),
+                fixture().absolutePath,
+            ) as ObfuscatedRlottieDrawable
+
+        assertEquals(fixture().absolutePath, drawable.file.absolutePath)
+        assertTrue(drawable.json?.startsWith("{") == true)
+    }
+
+    @Test
     fun animatedStickerFixture_exposesPinnedLottieStructure() {
         val metadata = metadata()
 
@@ -174,4 +188,15 @@ internal class LegacyRlottieDrawable(
     @Suppress("UNUSED_PARAMETER") limitFps: Boolean,
     @Suppress("UNUSED_PARAMETER") colorReplacement: IntArray?,
     @Suppress("UNUSED_PARAMETER") fitzModifier: Int,
+)
+
+internal class ObfuscatedRlottieDrawable(
+    val file: File,
+    val json: String?,
+    @Suppress("UNUSED_PARAMETER") width: Int,
+    @Suppress("UNUSED_PARAMETER") height: Int,
+    @Suppress("UNUSED_PARAMETER") cacheOptions: FakeCacheOptions,
+    @Suppress("UNUSED_PARAMETER") limitFps: Boolean,
+    @Suppress("UNUSED_PARAMETER") fitzModifier: Int,
+    @Suppress("UNUSED_PARAMETER") isSingleChannel: Boolean,
 )

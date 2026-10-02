@@ -2,6 +2,7 @@ package dev.xyenon.mxgram
 
 import android.app.Activity
 import android.content.Context
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
@@ -44,12 +45,16 @@ internal class StickerDownloadMenu(
         }
 
         val selectedObject =
-            try {
-                findField(chatActivity.javaClass, "selectedObject").get(chatActivity)
-            } catch (_: Throwable) {
-                null
-            } ?: return
+            (
+                try {
+                    TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).get(chatActivity)
+                } catch (_: Throwable) {
+                    null
+                }
+            ) ?: args.firstOrNull()?.takeIf { it.javaClass.name.endsWith("MessageObject") }
+                ?: return
         if (!isSaveableStickerMessage(selectedObject)) {
+            Log.d("MxGram", "addToMessageMenu: message is not saveable sticker: $selectedObject")
             return
         }
 
@@ -65,6 +70,7 @@ internal class StickerDownloadMenu(
         options.add(insertIndex, OPTION_SAVE_STICKER)
         items.add(insertIndex, label)
         icons.add(minOf(insertIndex, icons.size), galleryIcon)
+        Log.d("MxGram", "addToMessageMenu: added save sticker option at index $insertIndex")
     }
 
     fun handleSelectedOption(
@@ -83,7 +89,10 @@ internal class StickerDownloadMenu(
                 finishSelectedOption(chatActivity)
                 return true
             }
-            val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return true
+            val selectedObject =
+                TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).get(chatActivity)
+                    ?: return true
+            Log.i("MxGram", "handleSelectedOption: saving message sticker")
             stickerSaver.saveMessageSticker(activity, selectedObject) {
                 showDownloadBulletin(chatActivity)
             }
@@ -96,7 +105,7 @@ internal class StickerDownloadMenu(
 
     fun registerContentPreviewViewer(viewer: Any): Runnable {
         val runnable =
-            findField(viewer.javaClass, "showSheetRunnable").get(viewer) as? Runnable
+            TelegramObfuscationResolver.findContentPreviewShowSheetRunnableField(viewer.javaClass).get(viewer) as? Runnable
                 ?: throw IllegalStateException("ContentPreviewViewer.showSheetRunnable is not a Runnable")
         previewTarget = PreviewTarget(runnable, viewer)
         return runnable
@@ -112,27 +121,35 @@ internal class StickerDownloadMenu(
 
     private fun patchStickerPreviewMenu(viewer: Any) {
         try {
-            val contentType = findField(viewer.javaClass, "currentContentType").getInt(viewer)
+            val contentType = TelegramObfuscationResolver.findContentPreviewCurrentContentTypeField(viewer.javaClass).getInt(viewer)
+            Log.d("MxGram", "patchStickerPreviewMenu: contentType=$contentType")
             if (contentType != CONTENT_TYPE_STICKER) {
                 return
             }
-            if (findField(viewer.javaClass, "isPhotoEditor").getBoolean(viewer)) {
+            if (TelegramObfuscationResolver.findContentPreviewIsPhotoEditorFieldOrNull(viewer.javaClass)?.getBoolean(viewer) == true) {
                 return
             }
-            val currentDocument = findField(viewer.javaClass, "currentDocument").get(viewer) ?: return
+            val currentDocument = TelegramObfuscationResolver.findContentPreviewCurrentDocumentField(viewer.javaClass).get(viewer) ?: return
             val classLoader = viewer.javaClass.classLoader ?: return
             val messageObjectClass = classLoader.loadClass("org.telegram.messenger.MessageObject")
             if (invokeStaticBoolean(messageObjectClass, "isMaskDocument", arrayOf(currentDocument))) {
                 return
             }
-            val activity = findField(viewer.javaClass, "parentActivity").get(viewer) as? Activity ?: return
-            val account = findField(viewer.javaClass, "currentAccount").getInt(viewer)
-            val containerView = findField(viewer.javaClass, "containerView").get(viewer) as? FrameLayout ?: return
-            val resourcesProvider = findField(viewer.javaClass, "resourcesProvider").get(viewer)
-            val popupWindow = findField(viewer.javaClass, "popupWindow").get(viewer)
+            val activity =
+                TelegramObfuscationResolver.findContentPreviewParentActivityField(viewer.javaClass).get(viewer) as? Activity ?: return
+            val account = TelegramObfuscationResolver.findContentPreviewCurrentAccountField(viewer.javaClass).getInt(viewer)
+            val containerView =
+                TelegramObfuscationResolver.findContentPreviewContainerViewField(viewer.javaClass).get(viewer) as? FrameLayout ?: return
+            val resourcesProvider =
+                TelegramObfuscationResolver
+                    .findContentPreviewResourcesProviderFieldOrNull(
+                        viewer.javaClass,
+                    )?.get(viewer)
+            val popupWindow =
+                TelegramObfuscationResolver.findContentPreviewPopupWindowFieldOrNull(viewer.javaClass)?.get(viewer)
             if (popupWindow != null) {
                 val previewMenu =
-                    findMethod(popupWindow.javaClass, "getContentView").invoke(popupWindow) as? ViewGroup
+                    findMethodOrNull(popupWindow.javaClass, "getContentView")?.invoke(popupWindow) as? ViewGroup
                         ?: return
                 addPreviewSaveItem(
                     previewMenu,
@@ -146,7 +163,8 @@ internal class StickerDownloadMenu(
                 return
             }
 
-            val menuVisible = findField(viewer.javaClass, "menuVisible").getBoolean(viewer)
+            val menuVisible =
+                TelegramObfuscationResolver.findContentPreviewMenuVisibleFieldOrNull(viewer.javaClass)?.getBoolean(viewer) ?: false
             if (menuVisible &&
                 addPremiumPreviewSaveItem(
                     viewer,
@@ -185,8 +203,9 @@ internal class StickerDownloadMenu(
         containerView: FrameLayout,
         resourcesProvider: Any?,
     ): Boolean {
-        val unlockView = findField(viewer.javaClass, "unlockPremiumView").get(viewer) ?: return false
-        val premiumButton = findField(unlockView.javaClass, "premiumButtonView").get(unlockView) as? View ?: return false
+        val unlockView =
+            TelegramObfuscationResolver.findContentPreviewUnlockPremiumViewFieldOrNull(viewer.javaClass)?.get(viewer) ?: return false
+        val premiumButton = findFieldOrNull(unlockView.javaClass, "premiumButtonView")?.get(unlockView) as? View ?: return false
         val host = premiumButton.parent as? ViewGroup ?: return false
         val item =
             addPreviewSaveItem(
@@ -197,7 +216,12 @@ internal class StickerDownloadMenu(
                 account,
                 containerView,
                 resourcesProvider,
-            ) { findMethod(viewer.javaClass, "closeWithMenu").invoke(viewer) } ?: return false
+            ) {
+                val closeWithMenuMethod =
+                    TelegramObfuscationResolver.resolveContentPreviewCloseWithMenuMethod(viewer.javaClass)
+                        ?: findMethodOrNull(viewer.javaClass, "closeWithMenu")
+                closeWithMenuMethod?.invoke(viewer)
+            } ?: return false
         if (host.indexOfChild(item) != 0) {
             val layoutParams = item.layoutParams
             host.removeView(item)
@@ -219,14 +243,39 @@ internal class StickerDownloadMenu(
         val existing = previewMenuItems[host]?.get()?.takeIf { it.parent != null }
         val item =
             existing ?: run {
-                val actionBarMenuItemClass =
-                    Class.forName("org.telegram.ui.ActionBar.ActionBarMenuItem", false, classLoader)
-                val addItem =
-                    actionBarMenuItemClass.declaredMethods.firstOrNull { method ->
-                        method.name == "addItem" &&
-                            method.parameterCount == 5 &&
-                            ViewGroup::class.java.isAssignableFrom(method.parameterTypes[0])
-                    } ?: return null
+                val created = createMenuSubItem(host, resourcesProvider, classLoader) ?: return null
+                previewMenuItems[host] = WeakReference(created)
+                created
+            }
+        item.setOnClickListener {
+            if (!hasGalleryWritePermission(activity)) {
+                requestGalleryWritePermission(activity)
+                return@setOnClickListener
+            }
+            Log.i("MxGram", "saveDocumentSticker: saving preview sticker")
+            stickerSaver.saveDocumentSticker(activity, document, classLoader, account) {
+                showDownloadBulletin(containerView, resourcesProvider)
+            }
+            closeMenu()
+        }
+        return item
+    }
+
+    private fun createMenuSubItem(
+        host: ViewGroup,
+        resourcesProvider: Any?,
+        classLoader: ClassLoader,
+    ): View? {
+        val actionBarMenuItemClass =
+            TelegramObfuscationResolver.resolveClassOrNull(classLoader, "org.telegram.ui.ActionBar.ActionBarMenuItem")
+        if (actionBarMenuItemClass != null) {
+            val addItem =
+                actionBarMenuItemClass.declaredMethods.firstOrNull { method ->
+                    method.name == "addItem" &&
+                        method.parameterCount == 5 &&
+                        ViewGroup::class.java.isAssignableFrom(method.parameterTypes[0])
+                }
+            if (addItem != null) {
                 addItem.isAccessible = true
                 val created =
                     addItem.invoke(
@@ -236,21 +285,105 @@ internal class StickerDownloadMenu(
                         resolveSaveToGalleryLabel(classLoader),
                         false,
                         resourcesProvider,
-                    ) as? View ?: return null
-                previewMenuItems[host] = WeakReference(created)
-                created
+                    ) as? View
+                if (created != null) {
+                    return created
+                }
             }
-        item.setOnClickListener {
-            if (!hasGalleryWritePermission(activity)) {
-                requestGalleryWritePermission(activity)
-                return@setOnClickListener
-            }
-            stickerSaver.saveDocumentSticker(activity, document, classLoader, account) {
-                showDownloadBulletin(containerView, resourcesProvider)
-            }
-            closeMenu()
         }
-        return item
+
+        val subItemClass = TelegramObfuscationResolver.resolveActionBarMenuSubItem(classLoader)
+        val cell = instantiateMenuSubItem(subItemClass, host.context, resourcesProvider) ?: return null
+        val icon = resolveTelegramDrawable(classLoader, "msg_gallery", 0)
+        val text = resolveSaveToGalleryLabel(classLoader)
+
+        val setTextAndIcon =
+            findMethodOrNull(subItemClass, "setTextAndIcon", CharSequence::class.java, java.lang.Integer.TYPE)
+        if (setTextAndIcon != null) {
+            setTextAndIcon.invoke(cell, text, icon)
+        } else {
+            // R8 reorders the two-argument overload; the drawable overload retains this signature.
+            val withDrawable =
+                subItemClass.declaredMethods.single {
+                    it.parameterTypes.contentEquals(
+                        arrayOf(CharSequence::class.java, java.lang.Integer.TYPE, android.graphics.drawable.Drawable::class.java),
+                    ) && it.returnType == java.lang.Void.TYPE
+                }
+            withDrawable.isAccessible = true
+            withDrawable.invoke(cell, text, icon, null)
+        }
+        val minWidth = dp(classLoader, 196f)
+        findMethodOrNull(subItemClass, "setMinimumWidth", java.lang.Integer.TYPE)?.invoke(cell, minWidth)
+        host.addView(cell)
+        return cell
+    }
+
+    private fun instantiateMenuSubItem(
+        subItemClass: Class<*>,
+        context: Context,
+        resourcesProvider: Any?,
+    ): View? {
+        for (constructor in subItemClass.constructors) {
+            val params = constructor.parameterTypes
+            val instance =
+                runCatching {
+                    when (params.size) {
+                        5 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, false, false, false, resourcesProvider)
+                            } else if (params[1] == Context::class.java) {
+                                constructor.newInstance(0, context, resourcesProvider, false, false)
+                            } else {
+                                null
+                            }
+                        }
+
+                        4 -> {
+                            if (params[0] == Context::class.java &&
+                                (resourcesProvider == null || params[1].isInstance(resourcesProvider))
+                            ) {
+                                constructor.newInstance(context, resourcesProvider, false, false)
+                            } else if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, false, false, false)
+                            } else {
+                                null
+                            }
+                        }
+
+                        3 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, false, false)
+                            } else {
+                                null
+                            }
+                        }
+
+                        2 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, resourcesProvider)
+                            } else {
+                                null
+                            }
+                        }
+
+                        1 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context)
+                            } else {
+                                null
+                            }
+                        }
+
+                        else -> {
+                            null
+                        }
+                    }
+                }.getOrNull()
+            if (instance is View) {
+                return instance
+            }
+        }
+        return null
     }
 
     private fun createSaveOnlyPreviewPopup(
@@ -262,30 +395,23 @@ internal class StickerDownloadMenu(
         containerView: FrameLayout,
         resourcesProvider: Any?,
     ) {
-        if (findField(viewer.javaClass, "isVisible").getBoolean(viewer).not()) {
+        val isVisible =
+            TelegramObfuscationResolver.findContentPreviewIsVisibleFieldOrNull(viewer.javaClass)?.getBoolean(viewer)
+                ?: (findMethodOrNull(viewer.javaClass, "isVisible")?.invoke(viewer) as? Boolean)
+                ?: true
+        if (!isVisible) {
             return
         }
-        val resourcesProviderClass =
-            Class.forName("org.telegram.ui.ActionBar.Theme\$ResourcesProvider", false, classLoader)
         val layoutClass =
-            Class.forName(
-                "org.telegram.ui.ActionBar.ActionBarPopupWindow\$ActionBarPopupWindowLayout",
-                false,
+            TelegramObfuscationResolver.resolveClassOrNull(
                 classLoader,
-            )
+                "org.telegram.ui.ActionBar.ActionBarPopupWindow\$ActionBarPopupWindowLayout",
+            ) ?: return
+
         val previewMenu =
-            layoutClass
-                .getConstructor(
-                    Context::class.java,
-                    java.lang.Integer.TYPE,
-                    resourcesProviderClass,
-                    java.lang.Integer.TYPE,
-                ).newInstance(
-                    containerView.context,
-                    resolveTelegramDrawable(classLoader, "popup_fixed_alert4", 0),
-                    resourcesProvider,
-                    0,
-                ) as? ViewGroup ?: return
+            instantiatePopupWindowLayout(layoutClass, containerView.context, resourcesProvider, classLoader)
+                ?: return
+
         addPreviewSaveItem(
             previewMenu,
             activity,
@@ -296,49 +422,99 @@ internal class StickerDownloadMenu(
             resourcesProvider,
         ) { dismissPreviewPopup(viewer) } ?: return
 
-        val popupClass = Class.forName("org.telegram.ui.ActionBar.ActionBarPopupWindow", false, classLoader)
+        val popupClass = TelegramObfuscationResolver.resolveActionBarPopupWindow(classLoader)
         val popup =
             popupClass
                 .getConstructor(View::class.java, java.lang.Integer.TYPE, java.lang.Integer.TYPE)
                 .newInstance(previewMenu, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        findField(viewer.javaClass, "popupWindow").set(viewer, popup)
-        findField(viewer.javaClass, "menuVisible").setBoolean(viewer, true)
+        TelegramObfuscationResolver.findContentPreviewPopupWindowField(viewer.javaClass).set(viewer, popup)
+        TelegramObfuscationResolver.findContentPreviewMenuVisibleField(viewer.javaClass).setBoolean(viewer, true)
         ownedPreviewPopups[popup] = WeakReference(viewer)
         try {
-            findMethod(popupClass, "setPauseNotifications", java.lang.Boolean.TYPE).invoke(popup, true)
-            findMethod(popupClass, "setDismissAnimationDuration", java.lang.Integer.TYPE).invoke(popup, 100)
-            findMethod(popupClass, "setScaleOut", java.lang.Boolean.TYPE).invoke(popup, true)
-            findMethod(popupClass, "setOutsideTouchable", java.lang.Boolean.TYPE).invoke(popup, true)
-            findMethod(popupClass, "setClippingEnabled", java.lang.Boolean.TYPE).invoke(popup, true)
-            findMethod(popupClass, "setAnimationStyle", java.lang.Integer.TYPE)
-                .invoke(popup, resolveTelegramStyle(classLoader, "PopupContextAnimation"))
-            findMethod(popupClass, "setFocusable", java.lang.Boolean.TYPE).invoke(popup, true)
+            findMethodOrNull(popupClass, "setPauseNotifications", java.lang.Boolean.TYPE)?.invoke(popup, true)
+            findMethodOrNull(popupClass, "setDismissAnimationDuration", java.lang.Integer.TYPE)?.invoke(popup, 100)
+            findMethodOrNull(popupClass, "setScaleOut", java.lang.Boolean.TYPE)?.invoke(popup, true)
+            findMethodOrNull(popupClass, "setOutsideTouchable", java.lang.Boolean.TYPE)?.invoke(popup, true)
+            findMethodOrNull(popupClass, "setClippingEnabled", java.lang.Boolean.TYPE)?.invoke(popup, true)
+            findMethodOrNull(popupClass, "setAnimationStyle", java.lang.Integer.TYPE)
+                ?.invoke(popup, resolveTelegramStyle(classLoader, "PopupContextAnimation"))
+            findMethodOrNull(popupClass, "setFocusable", java.lang.Boolean.TYPE)?.invoke(popup, true)
             previewMenu.measure(
                 View.MeasureSpec.makeMeasureSpec(dp(classLoader, 1000f), View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(dp(classLoader, 1000f), View.MeasureSpec.AT_MOST),
             )
-            findMethod(popupClass, "setInputMethodMode", java.lang.Integer.TYPE)
-                .invoke(popup, PopupWindow.INPUT_METHOD_NOT_NEEDED)
+            findMethodOrNull(popupClass, "setInputMethodMode", java.lang.Integer.TYPE)
+                ?.invoke(popup, PopupWindow.INPUT_METHOD_NOT_NEEDED)
             previewMenu.isFocusableInTouchMode = true
             val y = previewPopupY(viewer, containerView, classLoader)
             val x = (containerView.measuredWidth - previewMenu.measuredWidth) / 2
-            findMethod(
+            findMethodOrNull(
                 popupClass,
                 "showAtLocation",
                 View::class.java,
                 java.lang.Integer.TYPE,
                 java.lang.Integer.TYPE,
                 java.lang.Integer.TYPE,
-            ).invoke(popup, containerView, 0, x, y)
+            )?.invoke(popup, containerView, 0, x, y)
             runCatching { containerView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
             containerView.invalidate()
         } catch (t: Throwable) {
             ownedPreviewPopups.remove(popup)
-            findField(viewer.javaClass, "popupWindow").set(viewer, null)
-            findField(viewer.javaClass, "menuVisible").setBoolean(viewer, false)
-            runCatching { findMethod(popupClass, "dismiss").invoke(popup) }
+            TelegramObfuscationResolver.findContentPreviewPopupWindowFieldOrNull(viewer.javaClass)?.set(viewer, null)
+            TelegramObfuscationResolver.findContentPreviewMenuVisibleFieldOrNull(viewer.javaClass)?.setBoolean(viewer, false)
+            runCatching { findMethodOrNull(popupClass, "dismiss")?.invoke(popup) }
             throw t
         }
+    }
+
+    private fun instantiatePopupWindowLayout(
+        layoutClass: Class<*>,
+        context: Context,
+        resourcesProvider: Any?,
+        classLoader: ClassLoader,
+    ): ViewGroup? {
+        val bgDrawableRes = resolveTelegramDrawable(classLoader, "popup_fixed_alert4", 0)
+        for (constructor in layoutClass.constructors) {
+            val params = constructor.parameterTypes
+            val instance =
+                runCatching {
+                    when (params.size) {
+                        4 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, bgDrawableRes, resourcesProvider, 0)
+                            } else if (params[2] == Context::class.java) {
+                                constructor.newInstance(0, bgDrawableRes, context, resourcesProvider)
+                            } else {
+                                null
+                            }
+                        }
+
+                        2 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context, resourcesProvider)
+                            } else {
+                                null
+                            }
+                        }
+
+                        1 -> {
+                            if (params[0] == Context::class.java) {
+                                constructor.newInstance(context)
+                            } else {
+                                null
+                            }
+                        }
+
+                        else -> {
+                            null
+                        }
+                    }
+                }.getOrNull()
+            if (instance is ViewGroup) {
+                return instance
+            }
+        }
+        return null
     }
 
     private fun previewPopupY(
@@ -346,12 +522,12 @@ internal class StickerDownloadMenu(
         containerView: FrameLayout,
         classLoader: ClassLoader,
     ): Int {
-        val insets = findField(viewer.javaClass, "lastInsets").get(viewer)
-        val insetTop = findField(insets.javaClass, "top").getInt(insets)
-        val insetBottom = findField(insets.javaClass, "bottom").getInt(insets)
-        val moveY = findField(viewer.javaClass, "moveY").getFloat(viewer)
-        val keyboardHeight = findField(viewer.javaClass, "keyboardHeight").getInt(viewer)
-        val drawEffect = findField(viewer.javaClass, "drawEffect").getBoolean(viewer)
+        val insets = findFieldOrNull(viewer.javaClass, "lastInsets")?.get(viewer)
+        val insetTop = insets?.let { findFieldOrNull(it.javaClass, "top")?.getInt(it) } ?: 0
+        val insetBottom = insets?.let { findFieldOrNull(it.javaClass, "bottom")?.getInt(it) } ?: 0
+        val moveY = TelegramObfuscationResolver.findContentPreviewMoveYFieldOrNull(viewer.javaClass)?.getFloat(viewer) ?: 0f
+        val keyboardHeight = TelegramObfuscationResolver.findContentPreviewKeyboardHeightFieldOrNull(viewer.javaClass)?.getInt(viewer) ?: 0
+        val drawEffect = TelegramObfuscationResolver.findContentPreviewDrawEffectFieldOrNull(viewer.javaClass)?.getBoolean(viewer) ?: false
         val size =
             if (drawEffect) {
                 min(containerView.width, containerView.height - insetTop - insetBottom) - dp(classLoader, 40f)
@@ -359,7 +535,13 @@ internal class StickerDownloadMenu(
                 (min(containerView.width, containerView.height - insetTop - insetBottom) / 1.8f).toInt()
             }
         val emojiOffset =
-            if (findField(viewer.javaClass, "stickerEmojiLayout").get(viewer) != null) dp(classLoader, 40f) else 0
+            if (TelegramObfuscationResolver.findContentPreviewStickerEmojiLayoutFieldOrNull(viewer.javaClass)?.get(viewer) !=
+                null
+            ) {
+                dp(classLoader, 40f)
+            } else {
+                0
+            }
         var y =
             (
                 moveY +
@@ -378,25 +560,30 @@ internal class StickerDownloadMenu(
     fun handlePreviewPopupDismissed(popupWindow: Any) {
         val viewer = ownedPreviewPopups.remove(popupWindow)?.get() ?: return
         try {
-            val popupField = findField(viewer.javaClass, "popupWindow")
+            val popupField = TelegramObfuscationResolver.findContentPreviewPopupWindowFieldOrNull(viewer.javaClass) ?: return
             if (popupField.get(viewer) !== popupWindow) {
                 return
             }
             popupField.set(viewer, null)
-            findField(viewer.javaClass, "menuVisible").setBoolean(viewer, false)
-            if (!findField(viewer.javaClass, "closeOnDismiss").getBoolean(viewer)) {
+            TelegramObfuscationResolver.findContentPreviewMenuVisibleFieldOrNull(viewer.javaClass)?.setBoolean(viewer, false)
+            val closeOnDismiss =
+                TelegramObfuscationResolver.findContentPreviewCloseOnDismissFieldOrNull(viewer.javaClass)?.getBoolean(viewer) ?: true
+            if (!closeOnDismiss) {
                 return
             }
-            val currentPreviewCellField = findField(viewer.javaClass, "currentPreviewCell")
-            val currentPreviewCell = currentPreviewCellField.get(viewer)
+            val currentPreviewCellField = TelegramObfuscationResolver.findContentPreviewCurrentPreviewCellFieldOrNull(viewer.javaClass)
+            val currentPreviewCell = currentPreviewCellField?.get(viewer)
             if (currentPreviewCell != null) {
                 runCatching {
-                    findMethod(currentPreviewCell.javaClass, "setScaled", java.lang.Boolean.TYPE)
-                        .invoke(currentPreviewCell, false)
+                    findMethodOrNull(currentPreviewCell.javaClass, "setScaled", java.lang.Boolean.TYPE)
+                        ?.invoke(currentPreviewCell, false)
                 }
                 currentPreviewCellField.set(viewer, null)
             }
-            findMethod(viewer.javaClass, "close").invoke(viewer)
+            val closeMethod =
+                TelegramObfuscationResolver.resolveContentPreviewCloseMethod(viewer.javaClass)
+                    ?: findMethodOrNull(viewer.javaClass, "close")
+            closeMethod?.invoke(viewer)
         } catch (t: Throwable) {
             logError("Failed to clean up sticker preview popup", t)
         }
@@ -425,35 +612,108 @@ internal class StickerDownloadMenu(
 
     private fun dismissPreviewPopup(viewer: Any) {
         try {
-            findMethod(viewer.javaClass, "dismissPopupWindow").invoke(viewer)
+            val dismissMethod =
+                TelegramObfuscationResolver.resolveContentPreviewDismissPopupWindowMethod(viewer.javaClass)
+                    ?: findMethodOrNull(viewer.javaClass, "dismissPopupWindow")
+            dismissMethod?.invoke(viewer)
+        } catch (_: Throwable) {
+        }
+        try {
+            val popupField = TelegramObfuscationResolver.findContentPreviewPopupWindowFieldOrNull(viewer.javaClass)
+            val popup = popupField?.get(viewer)
+            if (popup != null) {
+                findMethodOrNull(popup.javaClass, "dismiss")?.invoke(popup)
+                popupField.set(viewer, null)
+                TelegramObfuscationResolver.findContentPreviewMenuVisibleFieldOrNull(viewer.javaClass)?.setBoolean(viewer, false)
+            }
         } catch (_: Throwable) {
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun showDownloadBulletin(host: Any) {
         try {
-            val classLoader = host.javaClass.classLoader
-            val bulletinFactoryClass = Class.forName("org.telegram.ui.Components.BulletinFactory", false, classLoader)
+            val classLoader = host.javaClass.classLoader ?: return
+            val bulletinFactoryClass = TelegramObfuscationResolver.resolveBulletinFactory(classLoader)
+
             val ofMethod =
                 bulletinFactoryClass.declaredMethods.firstOrNull { method ->
-                    method.name == "of" && method.parameterCount == 1 && method.parameterTypes[0].isAssignableFrom(host.javaClass)
-                } ?: return
-            ofMethod.isAccessible = true
-            val factory = ofMethod.invoke(null, host) ?: return
-            val fileTypeClass = Class.forName("org.telegram.ui.Components.BulletinFactory\$FileType", false, classLoader)
-            val fileType =
-                runCatching { java.lang.Enum.valueOf(fileTypeClass as Class<out Enum<*>>, "MEDIA") }.getOrNull()
-                    ?: java.lang.Enum.valueOf(fileTypeClass as Class<out Enum<*>>, "PHOTO")
-            val themeDelegate = runCatching { findField(host.javaClass, "themeDelegate").get(host) }.getOrNull()
-            val createDownloadBulletin =
-                factory.javaClass.declaredMethods.firstOrNull { method ->
-                    method.name == "createDownloadBulletin" &&
-                        method.parameterCount == 2 &&
-                        method.parameterTypes[0] == fileTypeClass
-                } ?: return
-            createDownloadBulletin.isAccessible = true
-            val bulletin = createDownloadBulletin.invoke(factory, fileType, themeDelegate) ?: return
-            findMethod(bulletin.javaClass, "show").invoke(bulletin)
+                    java.lang.reflect.Modifier
+                        .isStatic(method.modifiers) &&
+                        method.returnType == bulletinFactoryClass &&
+                        method.parameterCount == 1 &&
+                        method.parameterTypes[0].isAssignableFrom(host.javaClass)
+                }
+            val factory =
+                ofMethod?.let {
+                    it.isAccessible = true
+                    it.invoke(null, host)
+                } ?: runCatching {
+                    val ctor =
+                        bulletinFactoryClass.constructors.firstOrNull {
+                            it.parameterCount == 1 && it.parameterTypes[0].isAssignableFrom(host.javaClass)
+                        }
+                    ctor?.newInstance(host)
+                }.getOrNull()
+
+            if (factory != null) {
+                val fileTypeClass =
+                    TelegramObfuscationResolver.resolveClassOrNull(
+                        classLoader,
+                        "org.telegram.ui.Components.BulletinFactory\$FileType",
+                    ) ?: bulletinFactoryClass.declaredMethods
+                        .flatMap { it.parameterTypes.toList() }
+                        .filter { it.isEnum }
+                        .distinct()
+                        .singleOrNull()
+                val fileType =
+                    fileTypeClass?.let { ft ->
+                        runCatching { java.lang.Enum.valueOf(ft as Class<out Enum<*>>, "MEDIA") }.getOrNull()
+                            ?: runCatching { java.lang.Enum.valueOf(ft as Class<out Enum<*>>, "PHOTO") }.getOrNull()
+                    }
+                val themeDelegate = runCatching { findFieldOrNull(host.javaClass, "themeDelegate")?.get(host) }.getOrNull()
+                val createDownloadBulletin =
+                    factory.javaClass.declaredMethods.firstOrNull { method ->
+                        method.parameterCount in 1..2 &&
+                            method.parameterTypes[0] == fileTypeClass
+                    }
+                if (createDownloadBulletin != null && fileType != null) {
+                    createDownloadBulletin.isAccessible = true
+                    val bulletin =
+                        when (createDownloadBulletin.parameterCount) {
+                            1 -> createDownloadBulletin.invoke(factory, fileType)
+                            2 -> createDownloadBulletin.invoke(factory, fileType, themeDelegate)
+                            else -> null
+                        }
+                    if (bulletin != null) {
+                        showBulletin(bulletin)
+                        return
+                    }
+                }
+            }
+
+            val staticSaveMethod =
+                bulletinFactoryClass.declaredMethods.firstOrNull { method ->
+                    java.lang.reflect.Modifier
+                        .isStatic(method.modifiers) &&
+                        method.parameterCount == 3 &&
+                        method.parameterTypes[0].isAssignableFrom(host.javaClass) &&
+                        method.parameterTypes[1] == java.lang.Boolean.TYPE &&
+                        method.parameterTypes[2].isInterface
+                }
+            if (staticSaveMethod != null) {
+                staticSaveMethod.isAccessible = true
+                val bulletin =
+                    if (staticSaveMethod.parameterCount == 2) {
+                        staticSaveMethod.invoke(null, host, false)
+                    } else {
+                        staticSaveMethod.invoke(null, host, false, null)
+                    }
+                if (bulletin != null) {
+                    showBulletin(bulletin)
+                    return
+                }
+            }
         } catch (t: Throwable) {
             logError("Failed to show sticker saved bulletin", t)
         }
@@ -464,17 +724,56 @@ internal class StickerDownloadMenu(
         resourcesProvider: Any?,
     ) {
         try {
-            val classLoader = containerLayout.javaClass.classLoader ?: resourcesProvider?.javaClass?.classLoader ?: return
-            val bulletinFactoryClass = Class.forName("org.telegram.ui.Components.BulletinFactory", false, classLoader)
+            val classLoader =
+                containerLayout.context.classLoader ?: resourcesProvider?.javaClass?.classLoader ?: return
+            val bulletinFactoryClass = TelegramObfuscationResolver.resolveBulletinFactory(classLoader)
+
+            val staticSaveMethod =
+                bulletinFactoryClass.declaredMethods.firstOrNull { method ->
+                    java.lang.reflect.Modifier
+                        .isStatic(method.modifiers) &&
+                        method.parameterCount in 2..3 &&
+                        method.parameterTypes[0].isAssignableFrom(containerLayout.javaClass) &&
+                        method.parameterTypes[1] == java.lang.Boolean.TYPE
+                }
+            if (staticSaveMethod != null) {
+                staticSaveMethod.isAccessible = true
+                val bulletin =
+                    if (staticSaveMethod.parameterCount == 2) {
+                        staticSaveMethod.invoke(null, containerLayout, false)
+                    } else {
+                        staticSaveMethod.invoke(null, containerLayout, false, resourcesProvider)
+                    }
+                if (bulletin != null) {
+                    showBulletin(bulletin)
+                    return
+                }
+            }
+
             val ofMethod =
                 bulletinFactoryClass.declaredMethods.firstOrNull { method ->
-                    method.name == "of" &&
+                    java.lang.reflect.Modifier
+                        .isStatic(method.modifiers) &&
+                        method.returnType == bulletinFactoryClass &&
+                        (method.name == "of" || method.parameterCount == 2) &&
                         method.parameterCount == 2 &&
                         method.parameterTypes[0].isAssignableFrom(containerLayout.javaClass)
-                } ?: return
-            ofMethod.isAccessible = true
-            val factory = ofMethod.invoke(null, containerLayout, resourcesProvider) ?: return
-            showDownloadBulletin(factory, classLoader, resourcesProvider)
+                }
+            val factory =
+                ofMethod?.let {
+                    it.isAccessible = true
+                    it.invoke(null, containerLayout, resourcesProvider)
+                } ?: runCatching {
+                    val ctor =
+                        bulletinFactoryClass.constructors.firstOrNull {
+                            it.parameterCount == 2 && it.parameterTypes[0].isAssignableFrom(containerLayout.javaClass)
+                        }
+                    ctor?.newInstance(containerLayout, resourcesProvider)
+                }.getOrNull()
+
+            if (factory != null) {
+                showDownloadBulletin(factory, classLoader, resourcesProvider)
+            }
         } catch (t: Throwable) {
             logError("Failed to show sticker saved bulletin", t)
         }
@@ -486,26 +785,52 @@ internal class StickerDownloadMenu(
         classLoader: ClassLoader,
         resourcesProvider: Any?,
     ) {
-        val fileTypeClass = Class.forName("org.telegram.ui.Components.BulletinFactory\$FileType", false, classLoader)
+        val fileTypeClass =
+            TelegramObfuscationResolver.resolveClassOrNull(
+                classLoader,
+                "org.telegram.ui.Components.BulletinFactory\$FileType",
+            ) ?: factory.javaClass.declaredMethods
+                .flatMap { it.parameterTypes.toList() }
+                .filter { it.isEnum }
+                .distinct()
+                .singleOrNull()
         val fileType =
-            runCatching { java.lang.Enum.valueOf(fileTypeClass as Class<out Enum<*>>, "MEDIA") }.getOrNull()
-                ?: java.lang.Enum.valueOf(fileTypeClass as Class<out Enum<*>>, "PHOTO")
+            fileTypeClass?.let { ft ->
+                runCatching { java.lang.Enum.valueOf(ft as Class<out Enum<*>>, "MEDIA") }.getOrNull()
+                    ?: runCatching { java.lang.Enum.valueOf(ft as Class<out Enum<*>>, "PHOTO") }.getOrNull()
+            }
         val createDownloadBulletin =
             factory.javaClass.declaredMethods.firstOrNull { method ->
-                method.name == "createDownloadBulletin" &&
-                    method.parameterCount == 2 &&
+                method.parameterCount in 1..2 &&
                     method.parameterTypes[0] == fileTypeClass
             } ?: return
         createDownloadBulletin.isAccessible = true
-        val bulletin = createDownloadBulletin.invoke(factory, fileType, resourcesProvider) ?: return
-        findMethod(bulletin.javaClass, "show").invoke(bulletin)
+        val bulletin =
+            if (createDownloadBulletin.parameterCount == 1) {
+                createDownloadBulletin.invoke(factory, fileType)
+            } else {
+                createDownloadBulletin.invoke(factory, fileType, resourcesProvider)
+            } ?: return
+        showBulletin(bulletin)
+    }
+
+    private fun showBulletin(bulletin: Any) {
+        val showMethod =
+            findMethodOrNull(bulletin.javaClass, "show")
+                ?: bulletin.javaClass.declaredMethods.singleOrNull {
+                    it.parameterCount == 0 &&
+                        !java.lang.reflect.Modifier
+                            .isStatic(it.modifiers) &&
+                        it.returnType == bulletin.javaClass
+                }
+        showMethod?.invoke(bulletin)
     }
 
     private fun clearSelection(chatActivity: Any) {
         try {
-            findField(chatActivity.javaClass, "selectedObject").set(chatActivity, null)
-            findField(chatActivity.javaClass, "selectedObjectGroup").set(chatActivity, null)
-            findField(chatActivity.javaClass, "selectedObjectToEditCaption").set(chatActivity, null)
+            TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).set(chatActivity, null)
+            TelegramObfuscationResolver.findChatSelectedObjectGroupField(chatActivity.javaClass).set(chatActivity, null)
+            TelegramObfuscationResolver.findChatSelectedObjectToEditCaptionFieldOrNull(chatActivity.javaClass)?.set(chatActivity, null)
         } catch (_: Throwable) {
         }
     }
@@ -513,7 +838,16 @@ internal class StickerDownloadMenu(
     private fun finishSelectedOption(chatActivity: Any) {
         clearSelection(chatActivity)
         try {
-            findMethod(chatActivity.javaClass, "closeMenu").invoke(chatActivity)
+            val closeMenu = findMethodOrNull(chatActivity.javaClass, "closeMenu")
+            if (closeMenu != null) {
+                closeMenu.invoke(chatActivity)
+            } else {
+                val popup =
+                    TelegramObfuscationResolver.findChatScrimPopupWindowFieldOrNull(chatActivity.javaClass)?.get(chatActivity)
+                if (popup != null) {
+                    findMethodOrNull(popup.javaClass, "dismiss")?.invoke(popup)
+                }
+            }
         } catch (t: Throwable) {
             logError("Failed to close sticker save menu", t)
         }
