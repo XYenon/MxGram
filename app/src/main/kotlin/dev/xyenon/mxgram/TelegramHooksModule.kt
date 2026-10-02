@@ -5,11 +5,15 @@ import android.util.Log
 import android.view.View
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 class TelegramHooksModule : XposedModule() {
     private val hooksInstalled = AtomicBoolean(false)
     private val previewRunnableHookInstalled = AtomicBoolean(false)
+    private val secretReadActions = Collections.synchronizedMap(WeakHashMap<Runnable, Runnable>())
+    private val secretReadRunnableClasses = HashSet<Class<*>>()
     private var processName: String = ""
     private val plusOneForwarder = PlusOneForwarder { message, throwable -> logError(message, throwable) }
     private val stickerDownloadMenu =
@@ -21,9 +25,11 @@ class TelegramHooksModule : XposedModule() {
     override fun onModuleLoaded(param: XposedModuleInterface.ModuleLoadedParam) {
         instance = this
         processName = param.processName
+        logInfo("Module loaded in $processName")
     }
 
     override fun onPackageReady(param: XposedModuleInterface.PackageReadyParam) {
+        logInfo("Package ready: ${param.packageName}")
         if (param.packageName != TARGET_PACKAGE) {
             return
         }
@@ -31,11 +37,28 @@ class TelegramHooksModule : XposedModule() {
             return
         }
 
+        TelegramObfuscationResolver.initialize(
+            classLoader = param.classLoader,
+            hostSourceDir = param.applicationInfo.sourceDir,
+            moduleSourceDir = moduleApplicationInfo.sourceDir,
+            moduleNativeLibDir = moduleApplicationInfo.nativeLibraryDir,
+            log = { msg -> logInfo(msg) },
+            logErr = { msg, err -> logError(msg, err) },
+        )
+
         installHooks(param.classLoader)
         logInfo("Telegram hook installation completed in $processName")
     }
 
     private fun installHooks(classLoader: ClassLoader) {
+        val chatActivityClass =
+            try {
+                TelegramObfuscationResolver.resolveChatActivity(classLoader)
+            } catch (t: Throwable) {
+                logError("Failed to resolve ChatActivity class", t)
+                null
+            }
+
         installHookGroup("noforwards and message flag hooks") {
             val messagesControllerClass =
                 Class.forName("org.telegram.messenger.MessagesController", false, classLoader)
@@ -44,43 +67,46 @@ class TelegramHooksModule : XposedModule() {
             hookNoForwardsRestrictions(messagesControllerClass)
             hookMessageNoForwardsFlag(messageObjectClass, tlrpcMessageClass)
         }
-        installHookGroup("self-destruct media hooks") {
-            hookSelfDestructMediaProtection(
-                Class.forName("org.telegram.ui.ChatActivity", false, classLoader),
-                Class.forName("org.telegram.messenger.MessagesController", false, classLoader),
-            )
-        }
-        installHookGroup("pull-down navigation hook") {
-            hookAnimateToNextChat(Class.forName("org.telegram.ui.ChatActivity", false, classLoader))
-        }
-        installHookGroup("double-tap listener hook") {
-            hookCreateView(Class.forName("org.telegram.ui.ChatActivity", false, classLoader))
+        if (chatActivityClass != null) {
+            installHookGroup("self-destruct media hooks") {
+                hookSelfDestructMediaProtection(
+                    chatActivityClass,
+                    Class.forName("org.telegram.messenger.MessagesController", false, classLoader),
+                )
+            }
+            installHookGroup("pull-down navigation hook") {
+                hookAnimateToNextChat(chatActivityClass)
+            }
+            installHookGroup("double-tap listener hook") {
+                hookCreateView(chatActivityClass)
+            }
+            installHookGroup("double-tap reaction hook") {
+                hookSelectReaction(chatActivityClass)
+            }
+            installHookGroup("+1 message hooks") {
+                hookPlusOneForward(chatActivityClass)
+            }
         }
         installHookGroup("greeting sticker hook") {
             hookGreetingStickerSend(
-                Class.forName("org.telegram.ui.Components.ChatGreetingsView", false, classLoader),
+                TelegramObfuscationResolver.resolveChatGreetingsView(classLoader),
+                classLoader,
             )
-        }
-        installHookGroup("double-tap reaction hook") {
-            hookSelectReaction(Class.forName("org.telegram.ui.ChatActivity", false, classLoader))
         }
         installHookGroup("pull-down target hooks") {
             hookPullingDownTargets(
-                Class.forName("org.telegram.ui.ChatPullingDownDrawable", false, classLoader),
+                TelegramObfuscationResolver.resolveChatPullingDownDrawable(classLoader),
             )
-        }
-        installHookGroup("+1 message hooks") {
-            hookPlusOneForward(Class.forName("org.telegram.ui.ChatActivity", false, classLoader))
         }
         installHookGroup("sticker download hooks") {
             hookStickerDownload(classLoader)
         }
         installHookGroup("profile ID hooks") {
-            hookProfileIdDisplay(Class.forName("org.telegram.ui.ProfileActivity", false, classLoader))
+            hookProfileIdDisplay(TelegramObfuscationResolver.resolveProfileActivity(classLoader))
         }
         installHookGroup("reply forward author hooks") {
             hookReplyForwardAuthor(
-                Class.forName("org.telegram.ui.Cells.ChatMessageCell", false, classLoader),
+                TelegramObfuscationResolver.resolveChatMessageCell(classLoader),
                 Class.forName("org.telegram.messenger.MessageObject", false, classLoader),
             )
         }
@@ -160,19 +186,21 @@ class TelegramHooksModule : XposedModule() {
     ) {
         installHookGroup("secret media read hook") {
             val sendSecretMessageRead =
-                chatActivityClass.declaredMethods.firstOrNull { method ->
-                    method.name == "sendSecretMessageRead" && method.parameterCount == 2
-                } ?: throw IllegalStateException("ChatActivity.sendSecretMessageRead(...) not found")
+                TelegramObfuscationResolver.resolveSendSecretMessageReadMethod(chatActivityClass)
             sendSecretMessageRead.isAccessible = true
             hook(sendSecretMessageRead).intercept(SecretMessageReadHooker())
+            logInfo("Hooked secret media read: $sendSecretMessageRead")
         }
         installHookGroup("secret media close hook") {
             val sendSecretMediaDelete =
-                chatActivityClass.declaredMethods.firstOrNull { method ->
-                    method.name == "sendSecretMediaDelete" && method.parameterCount == 1
-                } ?: throw IllegalStateException("ChatActivity.sendSecretMediaDelete(...) not found")
-            sendSecretMediaDelete.isAccessible = true
-            hook(sendSecretMediaDelete).intercept(SecretMediaDeleteHooker())
+                TelegramObfuscationResolver.resolveSendSecretMediaDeleteMethod(chatActivityClass)
+            if (sendSecretMediaDelete != null) {
+                sendSecretMediaDelete.isAccessible = true
+                hook(sendSecretMediaDelete).intercept(SecretMediaDeleteHooker())
+                logInfo("Hooked secret media delete: $sendSecretMediaDelete")
+            } else {
+                error("ChatActivity.sendSecretMediaDelete not found")
+            }
         }
         installHookGroup("content read delete-task hook") {
             val markMessageAsRead2 =
@@ -209,40 +237,62 @@ class TelegramHooksModule : XposedModule() {
     }
 
     private fun hookProfileIdDisplay(profileActivityClass: Class<*>) {
+        logInfo("Hooking profile activity: $profileActivityClass")
         installHookGroup("profile ID view hook") {
             val createView = profileActivityClass.getDeclaredMethod("createView", Context::class.java)
             createView.isAccessible = true
             hook(createView).intercept(ProfileCreateViewHooker())
+            logInfo("Hooked ProfileActivity.createView")
         }
         installHookGroup("profile ID data hook") {
             val updateProfileData =
-                profileActivityClass.getDeclaredMethod("updateProfileData", java.lang.Boolean.TYPE)
-            updateProfileData.isAccessible = true
-            hook(updateProfileData).intercept(ProfileUpdateDataHooker())
+                TelegramObfuscationResolver.resolveProfileUpdateDataMethod(profileActivityClass)
+            if (updateProfileData != null) {
+                updateProfileData.isAccessible = true
+                hook(updateProfileData).intercept(ProfileUpdateDataHooker())
+                logInfo("Hooked ProfileActivity.updateProfileData (${updateProfileData.name})")
+            } else {
+                logError("ProfileActivity updateProfileData method not found", IllegalStateException("updateProfileData not found"))
+            }
         }
         installHookGroup("profile ID layout hook") {
-            val needLayout = profileActivityClass.getDeclaredMethod("needLayout", java.lang.Boolean.TYPE)
-            needLayout.isAccessible = true
-            hook(needLayout).intercept(ProfileLayoutHooker())
+            val needLayout =
+                TelegramObfuscationResolver.resolveProfileNeedLayoutMethod(profileActivityClass)
+            if (needLayout != null) {
+                needLayout.isAccessible = true
+                hook(needLayout).intercept(ProfileLayoutHooker())
+                logInfo("Hooked ProfileActivity.needLayout (${needLayout.name})")
+            } else {
+                logError("ProfileActivity needLayout method not found", IllegalStateException("needLayout not found"))
+            }
         }
         installHookGroup("profile ID avatar expansion hook") {
             val setAvatarExpandProgress =
-                profileActivityClass.getDeclaredMethod("setAvatarExpandProgress", java.lang.Float.TYPE)
-            setAvatarExpandProgress.isAccessible = true
-            hook(setAvatarExpandProgress).intercept(ProfileLayoutHooker())
+                TelegramObfuscationResolver.resolveProfileSetAvatarExpandProgressMethod(profileActivityClass)
+            if (setAvatarExpandProgress != null) {
+                setAvatarExpandProgress.isAccessible = true
+                hook(setAvatarExpandProgress).intercept(ProfileLayoutHooker())
+                logInfo("Hooked ProfileActivity.setAvatarExpandProgress (${setAvatarExpandProgress.name})")
+            } else {
+                logError(
+                    "ProfileActivity setAvatarExpandProgress method not found",
+                    IllegalStateException("setAvatarExpandProgress not found"),
+                )
+            }
         }
     }
 
     private fun hookStickerDownload(classLoader: ClassLoader) {
         try {
             val contentPreviewViewerClass =
-                Class.forName("org.telegram.ui.ContentPreviewViewer", false, classLoader)
-            val getInstance = contentPreviewViewerClass.getDeclaredMethod("getInstance")
+                TelegramObfuscationResolver.resolveContentPreviewViewer(classLoader)
+            val getInstance =
+                TelegramObfuscationResolver.resolveContentPreviewGetInstance(contentPreviewViewerClass)
             getInstance.isAccessible = true
             hook(getInstance).intercept(ContentPreviewGetInstanceHooker())
 
             val popupWindowClass =
-                Class.forName("org.telegram.ui.ActionBar.ActionBarPopupWindow", false, classLoader)
+                TelegramObfuscationResolver.resolveActionBarPopupWindow(classLoader)
             val dismiss = popupWindowClass.getDeclaredMethod("dismiss")
             dismiss.isAccessible = true
             hook(dismiss).intercept(PreviewPopupDismissHooker())
@@ -253,41 +303,26 @@ class TelegramHooksModule : XposedModule() {
 
     @Throws(Exception::class)
     private fun hookPlusOneForward(chatActivityClass: Class<*>) {
-        // Telegram 12.9.2 uses arity 4: primaryMessage, icons, items, options. Keep the
-        // arity-5 fallback because the final three parallel lists are stable across releases.
-        val fillMessageMenu =
-            findDeclaredMethodByNameAndArity(chatActivityClass, "fillMessageMenu", 4, 5)
-                ?: throw IllegalStateException("ChatActivity.fillMessageMenu(...) not found")
+        val fillMessageMenu = TelegramObfuscationResolver.resolveFillMessageMenuMethod(chatActivityClass)
         fillMessageMenu.isAccessible = true
         hook(fillMessageMenu).intercept(FillMessageMenuHooker())
 
         val processSelectedOption =
-            chatActivityClass.getDeclaredMethod("processSelectedOption", java.lang.Integer.TYPE)
+            TelegramObfuscationResolver.resolveProcessSelectedOptionMethod(chatActivityClass)
         processSelectedOption.isAccessible = true
         hook(processSelectedOption).intercept(ProcessSelectedOptionHooker())
 
-        val createMenu =
-            chatActivityClass.declaredMethods.firstOrNull { method ->
-                val params = method.parameterTypes
-                method.name == "createMenu" &&
-                    method.returnType == java.lang.Boolean.TYPE &&
-                    params.size == 8 &&
-                    View::class.java.isAssignableFrom(params[0]) &&
-                    params[1] == java.lang.Boolean.TYPE &&
-                    params[2] == java.lang.Boolean.TYPE &&
-                    params[3] == java.lang.Float.TYPE &&
-                    params[4] == java.lang.Float.TYPE &&
-                    params.drop(5).all { type -> type == java.lang.Boolean.TYPE }
-            } ?: throw IllegalStateException("ChatActivity.createMenu(...) not found")
+        val createMenu = TelegramObfuscationResolver.resolveCreateMenuMethod(chatActivityClass)
         createMenu.isAccessible = true
         hook(createMenu).intercept(CreateMenuHooker())
     }
 
-    @Throws(NoSuchMethodException::class)
     private fun hookAnimateToNextChat(chatActivityClass: Class<*>) {
-        val method = chatActivityClass.getDeclaredMethod("animateToNextChat")
-        method.isAccessible = true
-        hook(method).intercept(BlockAnimateToNextChatHooker())
+        val method = TelegramObfuscationResolver.resolveAnimateToNextChatMethod(chatActivityClass)
+        if (method != null) {
+            method.isAccessible = true
+            hook(method).intercept(BlockAnimateToNextChatHooker())
+        }
     }
 
     @Throws(NoSuchMethodException::class)
@@ -298,11 +333,12 @@ class TelegramHooksModule : XposedModule() {
     }
 
     @Throws(NoSuchMethodException::class)
-    private fun hookGreetingStickerSend(chatGreetingsViewClass: Class<*>) {
+    private fun hookGreetingStickerSend(
+        chatGreetingsViewClass: Class<*>,
+        classLoader: ClassLoader,
+    ) {
         val listenerInterface =
-            chatGreetingsViewClass.declaredClasses.firstOrNull { innerClass ->
-                innerClass.simpleName == "Listener"
-            } ?: throw IllegalStateException("ChatGreetingsView.Listener not found")
+            TelegramObfuscationResolver.resolveChatGreetingsListener(classLoader, chatGreetingsViewClass)
 
         val method = chatGreetingsViewClass.getDeclaredMethod("setListener", listenerInterface)
         method.isAccessible = true
@@ -310,39 +346,21 @@ class TelegramHooksModule : XposedModule() {
     }
 
     private fun hookSelectReaction(chatActivityClass: Class<*>) {
-        for (method in chatActivityClass.declaredMethods) {
-            val params = method.parameterTypes
-            if (
-                method.name != "selectReaction" ||
-                method.returnType != java.lang.Void.TYPE ||
-                params.size != 11 ||
-                params[4] != java.lang.Float.TYPE ||
-                params[5] != java.lang.Float.TYPE ||
-                params.drop(7).any { type -> type != java.lang.Boolean.TYPE }
-            ) {
-                continue
-            }
-            method.isAccessible = true
-            hook(method).intercept(SelectReactionHooker())
-            return
-        }
-        throw IllegalStateException("ChatActivity.selectReaction(...) not found")
+        val method = TelegramObfuscationResolver.resolveSelectReactionMethod(chatActivityClass)
+        method.isAccessible = true
+        hook(method).intercept(SelectReactionHooker())
     }
 
     private fun hookPullingDownTargets(pullingDownDrawableClass: Class<*>) {
         var hooked = 0
-        for (method in pullingDownDrawableClass.declaredMethods) {
-            val isUpdateDialog =
-                method.name == "updateDialog" && (method.parameterCount == 0 || method.parameterCount == 1)
-            val isUpdateTopic = method.name == "updateTopic" && method.parameterCount == 0
-            if (!isUpdateDialog && !isUpdateTopic) {
-                continue
-            }
+        val updateMethods = TelegramObfuscationResolver.resolvePullingDownUpdateMethods(pullingDownDrawableClass)
+        for (method in updateMethods) {
             method.isAccessible = true
             hook(method).intercept(PullingDownTargetHooker())
             hooked += 1
         }
         check(hooked > 0) { "ChatPullingDownDrawable update methods not found" }
+        logInfo("Hooked $hooked pulling down update target methods in ${pullingDownDrawableClass.name}")
     }
 
     internal fun disableDoubleTapReaction(
@@ -354,10 +372,18 @@ class TelegramHooksModule : XposedModule() {
 
     @Throws(Exception::class)
     internal fun neutralizePullingDownTarget(pullingDownDrawable: Any) {
-        findField(pullingDownDrawable.javaClass, "emptyStub").setBoolean(pullingDownDrawable, true)
-        findField(pullingDownDrawable.javaClass, "nextChat").set(pullingDownDrawable, null)
-        findField(pullingDownDrawable.javaClass, "nextTopic").set(pullingDownDrawable, null)
-        findField(pullingDownDrawable.javaClass, "nextDialogId").setLong(pullingDownDrawable, 0L)
+        val cls = pullingDownDrawable.javaClass
+        TelegramObfuscationResolver.findPullingDownEmptyStubField(cls).setBoolean(pullingDownDrawable, true)
+        TelegramObfuscationResolver.findPullingDownNextChatField(cls).set(pullingDownDrawable, null)
+        TelegramObfuscationResolver.findPullingDownNextTopicField(cls).set(pullingDownDrawable, null)
+        TelegramObfuscationResolver.findPullingDownNextDialogIdField(cls).setLong(pullingDownDrawable, 0L)
+        TelegramObfuscationResolver.findPullingDownImageReceiverFieldOrNull(cls)?.get(pullingDownDrawable)?.let { ir ->
+            try {
+                findMethodOrNull(ir.javaClass, "clearImage")?.invoke(ir)
+            } catch (_: Throwable) {
+            }
+        }
+        android.util.Log.i("MxGram", "neutralizePullingDownTarget: set emptyStub=true, nextChat=null")
     }
 
     @Throws(Exception::class)
@@ -389,6 +415,28 @@ class TelegramHooksModule : XposedModule() {
         } else {
             action
         }
+    }
+
+    internal fun replaceDeferredSecretRead(
+        original: Runnable,
+        action: Runnable,
+    ): Runnable {
+        synchronized(secretReadRunnableClasses) {
+            if (original.javaClass !in secretReadRunnableClasses) {
+                val run = original.javaClass.getDeclaredMethod("run").apply { isAccessible = true }
+                hook(run).intercept(DeferredSecretReadHooker())
+                secretReadRunnableClasses.add(original.javaClass)
+            }
+        }
+        secretReadActions[original] = action
+        // R8 may narrow the return type to a concrete Runnable class. Keep that object.
+        return original
+    }
+
+    internal fun runDeferredSecretRead(runnable: Any?): Boolean {
+        val action = secretReadActions[runnable] ?: return false
+        action.run()
+        return true
     }
 
     @Throws(Exception::class)
@@ -458,6 +506,7 @@ class TelegramHooksModule : XposedModule() {
             val run = runnable.javaClass.getDeclaredMethod("run")
             run.isAccessible = true
             hook(run).intercept(ContentPreviewShowSheetHooker())
+            logInfo("Hooked sticker preview menu: $run")
         } catch (t: Throwable) {
             previewRunnableHookInstalled.set(false)
             logError("Failed to hook ContentPreviewViewer sticker menu runnable", t)
@@ -489,10 +538,16 @@ class TelegramHooksModule : XposedModule() {
         chatActivity: Any,
         messageObject: Any,
     ) {
-        val dialogId = findField(chatActivity.javaClass, "dialog_id").getLong(chatActivity)
-        val currentEncryptedChat = findField(chatActivity.javaClass, "currentEncryptedChat").get(chatActivity)
+        val dialogId =
+            try {
+                TelegramObfuscationResolver.getChatDialogId(chatActivity)
+            } catch (_: Throwable) {
+                0L
+            }
+        val currentEncryptedChat =
+            TelegramObfuscationResolver.findChatCurrentEncryptedChatFieldOrNull(chatActivity.javaClass)?.get(chatActivity)
         val messagesController =
-            findMethod(chatActivity.javaClass, "getMessagesController").invoke(chatActivity)
+            findMethodOrNull(chatActivity.javaClass, "getMessagesController")?.invoke(chatActivity)
                 ?: return
         val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return
         val ttl = findField(messageOwner.javaClass, "ttl").getInt(messageOwner)
@@ -521,6 +576,7 @@ class TelegramHooksModule : XposedModule() {
 
     private fun logInfo(message: String) {
         log(Log.INFO, TAG, message)
+        android.util.Log.i(TAG, message)
     }
 
     internal fun logError(
@@ -528,6 +584,7 @@ class TelegramHooksModule : XposedModule() {
         throwable: Throwable,
     ) {
         log(Log.ERROR, TAG, message, throwable)
+        android.util.Log.e(TAG, message, throwable)
     }
 
     companion object {

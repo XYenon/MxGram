@@ -94,19 +94,37 @@ class SecretMessageReadHooker : XposedInterface.Hooker {
         }
         val messageObject = args[0] ?: return chain.proceed()
         val readNow = args[1] as? Boolean ?: return chain.proceed()
+        val module = TelegramHooksModule.currentModule()
+        val action =
+            try {
+                module.buildSelfDestructMediaReadAction(
+                    chatActivity,
+                    messageObject,
+                    readNow,
+                )
+            } catch (t: Throwable) {
+                module.logError(
+                    "Failed to override Telegram self-destruct media read flow",
+                    t,
+                )
+                return chain.proceed()
+            } ?: return null
+        val original = chain.proceed() as? Runnable ?: return null
         return try {
-            TelegramHooksModule.currentModule().buildSelfDestructMediaReadAction(
-                chatActivity,
-                messageObject,
-                readNow,
-            )
+            module.replaceDeferredSecretRead(original, action)
         } catch (t: Throwable) {
-            TelegramHooksModule.currentModule().logError(
-                "Failed to override Telegram self-destruct media read flow",
-                t,
-            )
-            chain.proceed()
+            module.logError("Failed to hook Telegram deferred secret media read", t)
+            original
         }
+    }
+}
+
+class DeferredSecretReadHooker : XposedInterface.Hooker {
+    override fun intercept(chain: XposedInterface.Chain): Any? {
+        if (TelegramHooksModule.currentModule().runDeferredSecretRead(chain.thisObject)) {
+            return null
+        }
+        return chain.proceed()
     }
 }
 
@@ -210,6 +228,7 @@ class ProfileCreateViewHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
         val profileActivity = chain.thisObject ?: return result
+        android.util.Log.i("MxGram", "ProfileCreateViewHooker intercepted")
         TelegramHooksModule.currentModule().installProfileIdDisplay(profileActivity)
         return result
     }
@@ -219,6 +238,7 @@ class ProfileUpdateDataHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
         val profileActivity = chain.thisObject ?: return result
+        android.util.Log.i("MxGram", "ProfileUpdateDataHooker intercepted")
         TelegramHooksModule.currentModule().updateProfileIdDisplay(profileActivity)
         return result
     }
@@ -228,6 +248,7 @@ class ProfileLayoutHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val result = chain.proceed()
         val profileActivity = chain.thisObject ?: return result
+        android.util.Log.d("MxGram", "ProfileLayoutHooker intercepted: needLayout")
         TelegramHooksModule.currentModule().syncProfileIdDisplay(profileActivity)
         return result
     }
