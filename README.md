@@ -130,6 +130,8 @@ nix develop -c ./gradlew assembleDebug
 
 混淆适配不保存某个 APK 的短类名、方法名或字段名映射。聊天与预览状态通过类型、字符串、调用关系及字段读写关系定位；资料页文本数组按运行时长度识别，ID 文本挂在对应文本视图的父容器。签名或语义匹配必须唯一，无法确定时停用对应能力并记录日志，不按字段顺序、短名称或“第一个匹配项”猜测。仍保留未混淆源码名称和 Android/JNI 固定接口；Telegram 改变内部结构或语义标记后仍需重新适配。
 
+`+1` 的发送能力通过加密会话状态及视图可见性调用定位，屏蔽状态读取 `MessagesController` 的屏蔽列表；必要状态无法确定时不允许发送。按内容重发保留频道私信的 mono-forum peer 和建议消息参数，并支持 R8 将参数 getter 内联为字段访问。Premium 贴纸解锁页的保存入口按唯一的 final 视图字段定位。DEX 扫描按功能隔离异常，贴纸预览解析失败不会中止后续聊天或资料页解析。
+
 > 兼容性说明：已对照官方源码及 Google Play 混淆 APK 检查 Telegram **12.10.6（versionCode 71122）**，并在真机验证 hook 安装、聊天双击监听替换、资料页 ID/DC 展示、贴纸预览保存入口，以及静态 WebP、WebM 保存和 TGS 转 Animated WebP（180 帧）后保存。`+1` 已在 Saved Messages 实测点按转发及长按按内容重发，并只读核对数据库确认回复目标 ID 保留且没有转发来源标记；阅后即焚保留尚未完成端到端实测。模块通过 `TelegramObfuscationResolver` 使用 DEX 字符串、调用关系与方法签名解析混淆符号；双击监听按接口签名识别，预览容器按绘制方法识别，阅后即焚回调保留 R8 收窄后的实际返回类型，资料页 ID 从原始 Bundle 参数读取。其他发布渠道及后续版本仍需单独验证，不能仅凭 hook 安装成功认定全部功能可用。
 > 若 Telegram 升级后 hook 失效，优先检查以下类 / 方法：
 > `ChatActivity`、`ChatActivity.sendSecretMessageRead`、`ChatActivity.sendSecretMediaDelete`、`ChatPullingDownDrawable`、`ChatGreetingsView`、`MessagesController.markMessageAsRead2`、`ProfileActivity`、`ChatActivity.selectReaction`、`ChatMessageCell.setMessageObjectInternal`、`MessageObject.getForwardedName`

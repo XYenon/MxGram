@@ -146,10 +146,25 @@ internal fun invokeProcessForwardFromMyName(
                 5,
             ) ?: return false
         val monoForumPeer =
-            findMethodOrNull(chatActivity.javaClass, "getSendMonoForumPeerId")?.invoke(chatActivity) as? Long
-                ?: 0L
+            TelegramObfuscationResolver
+                .resolveChatSendMonoForumPeerIdMethodOrNull(chatActivity.javaClass)
+                ?.invoke(chatActivity) as? Long ?: return false
+        val suggestionMethod =
+            TelegramObfuscationResolver.resolveChatSendMessageSuggestionParamsMethodOrNull(
+                chatActivity.javaClass,
+                processForwardFromMyName.parameterTypes[4],
+            )
         val suggestionParams =
-            findMethodOrNull(chatActivity.javaClass, "getSendMessageSuggestionParams")?.invoke(chatActivity)
+            if (suggestionMethod != null) {
+                suggestionMethod.invoke(chatActivity)
+            } else {
+                val suggestionField =
+                    TelegramObfuscationResolver.findChatMessageSuggestionParamsFieldOrNull(
+                        chatActivity.javaClass,
+                        processForwardFromMyName.parameterTypes[4],
+                    ) ?: return false
+                suggestionField.get(chatActivity)
+            }
 
         val replyField = findField(messageObject.javaClass, "replyMessageObject")
         val previousReply = replyField.get(messageObject)

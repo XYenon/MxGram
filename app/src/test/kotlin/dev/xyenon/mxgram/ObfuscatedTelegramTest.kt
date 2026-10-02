@@ -81,6 +81,86 @@ class ObfuscatedTelegramTest {
             },
         )
     }
+
+    @Test
+    fun blockedStateComesFromControllerAndUnknownStateIsNotAllowed() {
+        val chat = BlockedChat()
+        assertTrue(isCurrentUserBlocked(chat, BlockedUser(918L)) == true)
+        assertFalse(isCurrentUserBlocked(chat, BlockedUser(317L)) != false)
+        assertTrue(isCurrentUserBlocked(Any(), BlockedUser(317L)) != false)
+        assertNull(TelegramObfuscationResolver.resolveChatCanSendMessageMethodOrNull(Any::class.java))
+    }
+
+    @Test
+    fun ordinaryChatRequiresResolvedCapabilityAndUnblockedUser() {
+        assertTrue(canSendToCurrentConversation(SendingChat(317L)))
+        assertFalse(canSendToCurrentConversation(SendingChat(918L)))
+        assertFalse(canSendToCurrentConversation(SendingChat(317L, allowed = false)))
+        assertFalse(canSendToCurrentConversation(CapabilityChat(317L)))
+        assertFalse(canSendToCurrentConversation(SendingChat(317L, controller = Any())))
+    }
+
+    @Test
+    fun repeatPreservesPeerAndInlinedSuggestionFieldAndRestoresReply() {
+        val helper = ContextSendHelper()
+        val suggestion = Suggestion()
+        val originalReply = Any()
+        val message = ContextMessage(originalReply)
+        val chat = ContextChat(helper, suggestion)
+        assertTrue(invokeProcessForwardFromMyName(chat, message) { _, error -> throw error })
+        assertEquals(963L, helper.peer)
+        assertSame(suggestion, helper.suggestion)
+        assertNull(helper.reply)
+        assertSame(originalReply, message.replyMessageObject)
+
+        chat.z = null
+        val override = Any()
+        assertTrue(invokeProcessForwardFromMyName(chat, message, override) { _, error -> throw error })
+        assertNull(helper.suggestion)
+        assertSame(override, helper.reply)
+        assertSame(originalReply, message.replyMessageObject)
+    }
+
+    @Test
+    fun repeatRefusesMissingPeerOrAmbiguousSuggestionState() {
+        val helper = ContextSendHelper()
+        assertFalse(invokeProcessForwardFromMyName(MissingContextChat(helper), ContextMessage(null)) { _, _ -> })
+        assertFalse(invokeProcessForwardFromMyName(AmbiguousContextChat(helper), ContextMessage(null)) { _, _ -> })
+        assertEquals(0, helper.sendCount)
+    }
+
+    @Test
+    fun repeatAcceptsResolvedZeroPeerAndNamedSuggestionGetter() {
+        val helper = ContextSendHelper()
+        val suggestion = Suggestion()
+        assertTrue(invokeProcessForwardFromMyName(NamedContextChat(helper, suggestion), ContextMessage(null)) { _, error -> throw error })
+        assertEquals(1, helper.sendCount)
+        assertEquals(0L, helper.peer)
+        assertSame(suggestion, helper.suggestion)
+    }
+
+    @Test
+    fun premiumButtonResolutionRequiresUniqueFinalView() {
+        assertEquals("z", TelegramObfuscationResolver.findUnlockPremiumButtonFieldOrNull(ObfuscatedUnlock::class.java)?.name)
+        assertNull(TelegramObfuscationResolver.findUnlockPremiumButtonFieldOrNull(AmbiguousUnlock::class.java))
+    }
+
+    @Test
+    fun ambiguousPreviewResolutionDoesNotAbortLaterFeatures() {
+        val logs = mutableListOf<String>()
+        assertNull(
+            TelegramObfuscationResolver.resolveFeature("preview", logs::add) {
+                TelegramObfuscationResolver.findContentPreviewContainerViewField(AmbiguousPreview::class.java)
+            },
+        )
+        assertTrue(logs.single().contains("preview"))
+        assertEquals(
+            "z",
+            TelegramObfuscationResolver.resolveFeature("chat", logs::add) {
+                TelegramObfuscationResolver.resolveSendSecretMessageReadMethod(ObfuscatedChat::class.java).name
+            },
+        )
+    }
 }
 
 internal interface ObfuscatedClickListener {
@@ -187,4 +267,128 @@ private class AmbiguousMethods {
     fun a() = 17L
 
     fun z() = 29L
+}
+
+private class BlockedUser(
+    val id: Long,
+)
+
+private class BlockedChat {
+    fun getMessagesController() = BlockedController()
+}
+
+private class BlockedController {
+    val blockePeers = BlockedPeers()
+}
+
+private class BlockedPeers {
+    fun indexOfKey(id: Long) = if (id == 918L) 0 else -1
+}
+
+private open class CapabilityChat(
+    userId: Long,
+    private val controller: Any = BlockedController(),
+) {
+    val chatMode = 0
+    val currentUser = BlockedUser(userId)
+    val currentChat: Any? = null
+
+    fun isReport() = false
+
+    fun getMessagesController() = controller
+}
+
+private class SendingChat(
+    userId: Long,
+    private val allowed: Boolean = true,
+    controller: Any = BlockedController(),
+) : CapabilityChat(userId, controller) {
+    fun canSendMessage() = allowed
+}
+
+private class Suggestion
+
+private class ContextMessage(
+    var replyMessageObject: Any?,
+)
+
+private class ContextSendHelper {
+    var peer = 0L
+    var suggestion: Suggestion? = null
+    var reply: Any? = null
+    var sendCount = 0
+
+    fun processForwardFromMyName(
+        message: ContextMessage,
+        dialogId: Long,
+        payStars: Long,
+        peerId: Long,
+        params: Suggestion?,
+    ) {
+        peer = peerId
+        suggestion = params
+        reply = message.replyMessageObject
+        sendCount++
+    }
+}
+
+private class ContextChat(
+    private val helper: ContextSendHelper,
+    var z: Suggestion?,
+) {
+    fun getDialogId() = 123L
+
+    fun getSendMessagesHelper() = helper
+
+    fun getSendMonoForumPeerId() = 963L
+}
+
+private class MissingContextChat(
+    private val helper: ContextSendHelper,
+) {
+    fun getDialogId() = 123L
+
+    fun getSendMessagesHelper() = helper
+}
+
+private class NamedContextChat(
+    private val helper: ContextSendHelper,
+    private val suggestion: Suggestion,
+) {
+    fun getDialogId() = 123L
+
+    fun getSendMessagesHelper() = helper
+
+    fun getSendMonoForumPeerId() = 0L
+
+    fun getSendMessageSuggestionParams() = suggestion
+}
+
+private class AmbiguousContextChat(
+    private val helper: ContextSendHelper,
+) {
+    var a: Suggestion? = null
+    var z: Suggestion? = null
+
+    fun getDialogId() = 123L
+
+    fun getSendMessagesHelper() = helper
+
+    fun getSendMonoForumPeerId() = 963L
+}
+
+private class ObfuscatedUnlock {
+    var a: View? = null
+    val b: String = "description"
+    val z: FrameLayout? = null
+}
+
+private class AmbiguousUnlock {
+    val a: View? = null
+    val z: FrameLayout? = null
+}
+
+private class AmbiguousPreview {
+    var a: PreviewDrawer? = null
+    var z: PreviewDrawer? = null
 }

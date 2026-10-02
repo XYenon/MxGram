@@ -87,6 +87,10 @@ class PlusOneSendHelperTest {
         fun getDialogId(): Long = 123L
 
         fun getSendMessagesHelper(): FakeSendMessagesHelper = sendMessagesHelper
+
+        fun getSendMonoForumPeerId(): Long = 0L
+
+        fun getSendMessageSuggestionParams(): Any? = null
     }
 
     internal class FakeSendMessagesHelper {

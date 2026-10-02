@@ -1,6 +1,6 @@
 package dev.xyenon.mxgram
 
-import android.view.View
+import android.os.Bundle
 
 /**
  * Mirrors [ChatActivity.fillMessageMenu] `allowChatActions` gates (Telegram 12.9.2 / 6991) so +1
@@ -15,17 +15,18 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
 
         val modeScheduled =
             getStaticIntFieldValue(chatActivityClass, "MODE_SCHEDULED", 1)
+        val arguments = findMethodOrNull(chatActivityClass, "getArguments")?.invoke(chatActivity) as? Bundle
         val chatMode =
-            try {
-                findFieldOrNull(chatActivityClass, "chatMode")?.getInt(chatActivity) ?: 0
-            } catch (_: Throwable) {
-                0
-            }
+            findFieldOrNull(chatActivityClass, "chatMode")?.getInt(chatActivity)
+                ?: arguments?.getInt("chatMode", 0) ?: return false
         if (chatMode == modeScheduled) {
             return false
         }
 
-        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "isReport") == true) {
+        val isReport =
+            invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "isReport")
+                ?: arguments?.let { !it.getString("reportTitle").isNullOrEmpty() } ?: return false
+        if (isReport) {
             return false
         }
 
@@ -35,36 +36,28 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
             return false
         }
 
-        val bottomChannelButtonsLayout =
-            findFieldOrNull(chatActivityClass, "bottomChannelButtonsLayout")?.get(chatActivity)
-        if (bottomChannelButtonsLayout is View && bottomChannelButtonsLayout.visibility == View.VISIBLE) {
+        if (TelegramObfuscationResolver
+                .resolveChatCanSendMessageMethodOrNull(chatActivityClass)
+                ?.invoke(chatActivity) != true
+        ) {
             return false
         }
 
-        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "canSendMessage") == false) {
+        val currentUserField = TelegramObfuscationResolver.findChatCurrentUserFieldOrNull(chatActivityClass)
+        val currentUserMethod = TelegramObfuscationResolver.resolveChatGetCurrentUserMethodOrNull(chatActivityClass)
+        if (currentUserField == null && currentUserMethod == null) return false
+        val currentUser = currentUserField?.get(chatActivity) ?: currentUserMethod?.invoke(chatActivity)
+        if (currentUser != null && isCurrentUserBlocked(chatActivity, currentUser) != false) {
             return false
         }
-
-        try {
-            if (findFieldOrNull(chatActivityClass, "userBlocked")?.getBoolean(chatActivity) == true) {
-                return false
-            }
-        } catch (_: Throwable) {
-            // Ignore.
-        }
-
-        val currentUser =
-            TelegramObfuscationResolver.findChatCurrentUserFieldOrNull(chatActivityClass)?.get(chatActivity)
-                ?: TelegramObfuscationResolver.resolveChatGetCurrentUserMethodOrNull(chatActivityClass)?.invoke(chatActivity)
-                ?: findMethodOrNull(chatActivityClass, "getCurrentUser")?.invoke(chatActivity)
         if (currentUser != null && invokeStaticBoolean(userObjectClass, "isReplyUser", arrayOf(currentUser))) {
             return false
         }
 
-        val currentChat =
-            TelegramObfuscationResolver.findChatCurrentChatFieldOrNull(chatActivityClass)?.get(chatActivity)
-                ?: TelegramObfuscationResolver.resolveChatGetCurrentChatMethodOrNull(chatActivityClass)?.invoke(chatActivity)
-                ?: findMethodOrNull(chatActivityClass, "getCurrentChat")?.invoke(chatActivity)
+        val currentChatField = TelegramObfuscationResolver.findChatCurrentChatFieldOrNull(chatActivityClass)
+        val currentChatMethod = TelegramObfuscationResolver.resolveChatGetCurrentChatMethodOrNull(chatActivityClass)
+        if (currentChatField == null && currentChatMethod == null) return false
+        val currentChat = currentChatField?.get(chatActivity) ?: currentChatMethod?.invoke(chatActivity)
         if (currentChat == null) {
             return true
         }
@@ -124,6 +117,23 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
     } catch (_: Throwable) {
         // Do not expose a send action when Telegram's current capability cannot be established.
         return false
+    }
+}
+
+internal fun isCurrentUserBlocked(
+    chatActivity: Any,
+    currentUser: Any,
+): Boolean? {
+    return try {
+        // Messenger state retains its source names in the shipped APK, unlike ChatActivity.userBlocked.
+        val controller =
+            findMethod(chatActivity.javaClass, "getMessagesController").invoke(chatActivity)
+                ?: return null
+        val blockedPeers = findField(controller.javaClass, "blockePeers").get(controller) ?: return null
+        val userId = findField(currentUser.javaClass, "id").getLong(currentUser)
+        (findMethod(blockedPeers.javaClass, "indexOfKey", java.lang.Long.TYPE).invoke(blockedPeers, userId) as Int) >= 0
+    } catch (_: Throwable) {
+        null
     }
 }
 

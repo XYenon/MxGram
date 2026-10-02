@@ -205,7 +205,10 @@ internal class StickerDownloadMenu(
     ): Boolean {
         val unlockView =
             TelegramObfuscationResolver.findContentPreviewUnlockPremiumViewFieldOrNull(viewer.javaClass)?.get(viewer) ?: return false
-        val premiumButton = findFieldOrNull(unlockView.javaClass, "premiumButtonView")?.get(unlockView) as? View ?: return false
+        val premiumButton =
+            TelegramObfuscationResolver
+                .findUnlockPremiumButtonFieldOrNull(unlockView.javaClass)
+                ?.get(unlockView) as? View ?: return false
         val host = premiumButton.parent as? ViewGroup ?: return false
         val item =
             addPreviewSaveItem(

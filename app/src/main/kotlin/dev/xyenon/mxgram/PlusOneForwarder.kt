@@ -112,6 +112,7 @@ internal class PlusOneForwarder(
     @Suppress("UNCHECKED_CAST")
     fun forwardSelectedMessageToCurrentChat(chatActivity: Any) {
         try {
+            if (!canSendToCurrentConversation(chatActivity)) return
             val selectedObject =
                 TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).get(chatActivity)
                     ?: return
