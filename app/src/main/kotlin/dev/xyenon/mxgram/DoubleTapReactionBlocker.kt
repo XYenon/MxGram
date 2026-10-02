@@ -1,5 +1,8 @@
 package dev.xyenon.mxgram
 
+import android.util.Log
+import android.view.View
+import java.lang.reflect.Field
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -10,13 +13,33 @@ internal object DoubleTapReactionBlocker {
         classLoader: ClassLoader?,
         logError: (String, Throwable) -> Unit,
     ) {
+        val loader = classLoader ?: chatActivity.javaClass.classLoader
         try {
-            val chatListView = findField(chatActivity.javaClass, "chatListView").get(chatActivity) ?: return
-
             val recyclerListViewClass =
-                Class.forName("org.telegram.ui.Components.RecyclerListView", false, classLoader)
-            val listenerField = findField(recyclerListViewClass, "onItemClickListenerExtended")
-            val originalListener = listenerField.get(chatListView) ?: return
+                loader?.let { TelegramObfuscationResolver.resolveRecyclerListView(it) }
+                    ?: run {
+                        Log.w("MxGram", "DoubleTapReactionBlocker: RecyclerListView class not resolved")
+                        return
+                    }
+            val listenerField =
+                findFieldOrNull(recyclerListViewClass, "onItemClickListenerExtended")
+                    ?: findExtendedClickListenerField(recyclerListViewClass)
+                    ?: run {
+                        Log.w("MxGram", "DoubleTapReactionBlocker: onItemClickListenerExtended field not found")
+                        return
+                    }
+            val chatListView =
+                findMessageListView(chatActivity, recyclerListViewClass, listenerField)
+                    ?: run {
+                        Log.w("MxGram", "DoubleTapReactionBlocker: message list with extended listener not found")
+                        return
+                    }
+            val originalListener =
+                listenerField.get(chatListView)
+                    ?: run {
+                        Log.w("MxGram", "DoubleTapReactionBlocker: original onItemClickListenerExtended is null")
+                        return
+                    }
             if (Proxy.isProxyClass(originalListener.javaClass)) {
                 val handler = Proxy.getInvocationHandler(originalListener)
                 if (handler is DoubleTapDisablingHandler) {
@@ -24,28 +47,67 @@ internal object DoubleTapReactionBlocker {
                 }
             }
 
-            val listenerInterface =
-                Class.forName(
-                    "org.telegram.ui.Components.RecyclerListView\$OnItemClickListenerExtended",
-                    false,
-                    classLoader,
-                )
+            val listenerInterface = listenerField.type
             val proxy =
                 Proxy.newProxyInstance(
-                    classLoader,
-                    arrayOf<Class<*>>(listenerInterface),
+                    loader,
+                    arrayOf(listenerInterface),
                     DoubleTapDisablingHandler(originalListener),
                 )
 
-            val setter = recyclerListViewClass.getDeclaredMethod("setOnItemClickListener", listenerInterface)
+            val setter =
+                recyclerListViewClass.declaredMethods.firstOrNull {
+                    (it.name == "setOnItemClickListener" || it.name == "setOnItemClickListenerExtended") &&
+                        it.parameterCount == 1 && it.parameterTypes[0] == listenerInterface
+                } ?: recyclerListViewClass.declaredMethods.single {
+                    it.parameterTypes.contentEquals(arrayOf(listenerInterface)) && it.returnType == java.lang.Void.TYPE
+                }
             setter.isAccessible = true
             setter.invoke(chatListView, proxy)
+            Log.i("MxGram", "Disabled double-tap listener: ${listenerField.name}")
         } catch (t: Throwable) {
             logError("Failed to replace Telegram double-tap listener", t)
         }
     }
 
-    private class DoubleTapDisablingHandler(
+    internal fun findMessageListView(
+        chatActivity: Any,
+        listType: Class<*>,
+        listenerField: Field,
+    ): Any? {
+        findFieldOrNull(chatActivity.javaClass, "chatListView")?.get(chatActivity)?.let { return it }
+        // ChatActivity also owns search/mention lists. Only the message list uses this listener.
+        return chatActivity.javaClass.declaredFields
+            .asSequence()
+            .filter { listType.isAssignableFrom(it.type) }
+            .mapNotNull {
+                it.isAccessible = true
+                it.get(chatActivity)
+            }.filter { listenerField.get(it) != null }
+            .singleOrNull()
+    }
+
+    internal fun findExtendedClickListenerField(type: Class<*>): Field? =
+        type.declaredFields
+            .singleOrNull { field ->
+                field.type.isInterface && field.type.methods.any(::isHasDoubleTap) &&
+                    field.type.methods.any(::isOnDoubleTap)
+            }?.also { it.isAccessible = true }
+
+    private fun isHasDoubleTap(method: Method): Boolean =
+        method.returnType == java.lang.Boolean.TYPE &&
+            (method.name == "hasDoubleTap" || method.parameterTypes.contentEquals(arrayOf(View::class.java)))
+
+    private fun isOnDoubleTap(method: Method): Boolean =
+        method.returnType == java.lang.Void.TYPE &&
+            (
+                method.name == "onDoubleTap" ||
+                    method.parameterTypes.contentEquals(
+                        arrayOf(View::class.java, java.lang.Float.TYPE, java.lang.Float.TYPE),
+                    )
+            )
+
+    internal class DoubleTapDisablingHandler(
         private val original: Any,
     ) : InvocationHandler {
         @Throws(Throwable::class)
@@ -55,10 +117,10 @@ internal object DoubleTapReactionBlocker {
             args: Array<Any?>?,
         ): Any? {
             val name = method.name
-            if (name == "hasDoubleTap") {
+            if (isHasDoubleTap(method)) {
                 return false
             }
-            if (name == "onDoubleTap") {
+            if (isOnDoubleTap(method)) {
                 return null
             }
             if (method.declaringClass == Any::class.java) {

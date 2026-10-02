@@ -58,11 +58,13 @@ internal class PlusOneReplyRepeater(
 
     private fun buildPendingPlusOneReply(chatActivity: Any): PendingPlusOneReply? {
         try {
-            val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return null
+            val selectedObject =
+                TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).get(chatActivity)
+                    ?: return null
             val selectedIdentity = messageIdentity(selectedObject) ?: return null
 
             val selectedObjectGroup =
-                findField(chatActivity.javaClass, "selectedObjectGroup").get(chatActivity)
+                TelegramObfuscationResolver.findChatSelectedObjectGroupField(chatActivity.javaClass).get(chatActivity)
             if (selectedObjectGroup != null) {
                 return PendingPlusOneReply(null, selectedIdentity)
             }

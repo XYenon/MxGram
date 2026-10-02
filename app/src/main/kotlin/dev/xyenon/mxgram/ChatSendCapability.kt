@@ -17,8 +17,8 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
             getStaticIntFieldValue(chatActivityClass, "MODE_SCHEDULED", 1)
         val chatMode =
             try {
-                findField(chatActivityClass, "chatMode").getInt(chatActivity)
-            } catch (_: NoSuchFieldException) {
+                findFieldOrNull(chatActivityClass, "chatMode")?.getInt(chatActivity) ?: 0
+            } catch (_: Throwable) {
                 0
             }
         if (chatMode == modeScheduled) {
@@ -30,53 +30,41 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
         }
 
         val currentEncryptedChat =
-            try {
-                findField(chatActivityClass, "currentEncryptedChat").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            TelegramObfuscationResolver.findChatCurrentEncryptedChatFieldOrNull(chatActivityClass)?.get(chatActivity)
         if (currentEncryptedChat != null) {
             return false
         }
 
         val bottomChannelButtonsLayout =
-            try {
-                findField(chatActivityClass, "bottomChannelButtonsLayout").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            findFieldOrNull(chatActivityClass, "bottomChannelButtonsLayout")?.get(chatActivity)
         if (bottomChannelButtonsLayout is View && bottomChannelButtonsLayout.visibility == View.VISIBLE) {
             return false
         }
 
-        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "canSendMessage") != true) {
+        if (invokeInstanceBooleanOrNull(chatActivityClass, chatActivity, "canSendMessage") == false) {
             return false
         }
 
         try {
-            if (findField(chatActivityClass, "userBlocked").getBoolean(chatActivity)) {
+            if (findFieldOrNull(chatActivityClass, "userBlocked")?.getBoolean(chatActivity) == true) {
                 return false
             }
-        } catch (_: NoSuchFieldException) {
+        } catch (_: Throwable) {
             // Ignore.
         }
 
         val currentUser =
-            try {
-                findField(chatActivityClass, "currentUser").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            TelegramObfuscationResolver.findChatCurrentUserFieldOrNull(chatActivityClass)?.get(chatActivity)
+                ?: TelegramObfuscationResolver.resolveChatGetCurrentUserMethodOrNull(chatActivityClass)?.invoke(chatActivity)
+                ?: findMethodOrNull(chatActivityClass, "getCurrentUser")?.invoke(chatActivity)
         if (currentUser != null && invokeStaticBoolean(userObjectClass, "isReplyUser", arrayOf(currentUser))) {
             return false
         }
 
         val currentChat =
-            try {
-                findField(chatActivityClass, "currentChat").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            TelegramObfuscationResolver.findChatCurrentChatFieldOrNull(chatActivityClass)?.get(chatActivity)
+                ?: TelegramObfuscationResolver.resolveChatGetCurrentChatMethodOrNull(chatActivityClass)?.invoke(chatActivity)
+                ?: findMethodOrNull(chatActivityClass, "getCurrentChat")?.invoke(chatActivity)
         if (currentChat == null) {
             return true
         }
@@ -105,11 +93,7 @@ internal fun canSendToCurrentConversation(chatActivity: Any): Boolean {
         }
 
         val forumTopic =
-            try {
-                findField(chatActivityClass, "forumTopic").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            TelegramObfuscationResolver.findChatForumTopicFieldOrNull(chatActivityClass)?.get(chatActivity)
         if (forumTopic != null) {
             val closed =
                 try {

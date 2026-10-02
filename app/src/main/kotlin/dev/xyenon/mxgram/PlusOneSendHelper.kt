@@ -22,20 +22,13 @@ internal fun isPeerNoForwardsFromRawPeerState(chatActivity: Any): Boolean =
     try {
         val chatActivityClass = chatActivity.javaClass
         val currentChat =
-            try {
-                findField(chatActivityClass, "currentChat").get(chatActivity)
-            } catch (_: NoSuchFieldException) {
-                null
-            }
+            TelegramObfuscationResolver.findChatCurrentChatFieldOrNull(chatActivityClass)?.get(chatActivity)
+                ?: findMethodOrNull(chatActivityClass, "getCurrentChat")?.invoke(chatActivity)
         if (currentChat != null) {
             isChatNoForwardsFromRawChat(chatActivity, currentChat)
         } else {
             val userInfo =
-                try {
-                    findField(chatActivityClass, "userInfo").get(chatActivity)
-                } catch (_: NoSuchFieldException) {
-                    null
-                }
+                TelegramObfuscationResolver.findChatUserInfoFieldOrNull(chatActivityClass)?.get(chatActivity)
             isUserNoForwardsFromRawUserFull(userInfo)
         }
     } catch (_: Throwable) {
@@ -141,9 +134,11 @@ internal fun invokeProcessForwardFromMyName(
     logError: (String, Throwable) -> Unit,
 ): Boolean {
     return try {
-        val dialogId = chatActivity.javaClass.getMethod("getDialogId").invoke(chatActivity) as Long
+        val dialogId = TelegramObfuscationResolver.getChatDialogId(chatActivity)
         val sendMessagesHelper =
-            chatActivity.javaClass.getMethod("getSendMessagesHelper").invoke(chatActivity) ?: return false
+            findMethodOrNull(chatActivity.javaClass, "getSendMessagesHelper")?.invoke(chatActivity)
+                ?: chatActivity.javaClass.getMethod("getSendMessagesHelper").invoke(chatActivity)
+                ?: return false
         val processForwardFromMyName =
             findDeclaredMethodByNameAndArity(
                 sendMessagesHelper.javaClass,
@@ -151,17 +146,10 @@ internal fun invokeProcessForwardFromMyName(
                 5,
             ) ?: return false
         val monoForumPeer =
-            try {
-                chatActivity.javaClass.getMethod("getSendMonoForumPeerId").invoke(chatActivity) as Long
-            } catch (_: NoSuchMethodException) {
-                0L
-            }
+            findMethodOrNull(chatActivity.javaClass, "getSendMonoForumPeerId")?.invoke(chatActivity) as? Long
+                ?: 0L
         val suggestionParams =
-            try {
-                chatActivity.javaClass.getMethod("getSendMessageSuggestionParams").invoke(chatActivity)
-            } catch (_: NoSuchMethodException) {
-                null
-            }
+            findMethodOrNull(chatActivity.javaClass, "getSendMessageSuggestionParams")?.invoke(chatActivity)
 
         val replyField = findField(messageObject.javaClass, "replyMessageObject")
         val previousReply = replyField.get(messageObject)

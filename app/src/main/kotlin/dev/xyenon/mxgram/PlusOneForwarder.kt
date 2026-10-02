@@ -1,5 +1,6 @@
 package dev.xyenon.mxgram
 
+import android.util.Log
 import android.view.View
 import java.util.WeakHashMap
 import kotlin.math.min
@@ -66,31 +67,58 @@ internal class PlusOneForwarder(
     fun attachLongPressToMenuItem(chatActivity: Any) {
         val index = plusOneMenuIndex.remove(chatActivity) ?: return
         try {
-            val itemsRaw = findField(chatActivity.javaClass, "scrimPopupWindowItems").get(chatActivity)
+            val itemsRaw = TelegramObfuscationResolver.findChatScrimPopupWindowItemsFieldOrNull(chatActivity.javaClass)?.get(chatActivity)
             if (itemsRaw !is Array<*>) {
+                Log.w("MxGram", "attachLongPressToMenuItem: itemsRaw is not Array")
                 return
             }
-            if (index < 0 || index >= itemsRaw.size) {
+            var targetItem: View? = null
+            if (index in itemsRaw.indices && isPlusOneItem(itemsRaw[index])) {
+                targetItem = itemsRaw[index] as? View
+            }
+            if (targetItem == null) {
+                targetItem = itemsRaw.filterIsInstance<View>().firstOrNull { isPlusOneItem(it) }
+            }
+            if (targetItem == null && index in itemsRaw.indices) {
+                targetItem = itemsRaw[index] as? View
+            }
+            if (targetItem == null) {
+                Log.w("MxGram", "attachLongPressToMenuItem: targetItem not found (index=$index, size=${itemsRaw.size})")
                 return
             }
-            val item = itemsRaw[index]
-            if (item !is View) {
-                return
-            }
-            item.setOnLongClickListener { view -> onPlusOneLongPressed(chatActivity, view) }
+            Log.i("MxGram", "attachLongPressToMenuItem: attached long-click listener to +1 item")
+            targetItem.setOnLongClickListener { view -> onPlusOneLongPressed(chatActivity, view) }
         } catch (t: Throwable) {
             logError("Failed to attach +1 long-press listener", t)
+        }
+    }
+
+    private fun isPlusOneItem(view: Any?): Boolean {
+        if (view !is View) return false
+        return try {
+            val textView =
+                findMethodOrNull(view.javaClass, "getTextView")?.invoke(view)
+                    ?: findFieldOrNull(view.javaClass, "textView")?.get(view)
+            if (textView is android.widget.TextView && textView.text?.toString() == "+1") {
+                true
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
         }
     }
 
     @Suppress("UNCHECKED_CAST")
     fun forwardSelectedMessageToCurrentChat(chatActivity: Any) {
         try {
-            val selectedObject = findField(chatActivity.javaClass, "selectedObject").get(chatActivity) ?: return
+            val selectedObject =
+                TelegramObfuscationResolver.findChatSelectedObjectField(chatActivity.javaClass).get(chatActivity)
+                    ?: return
             val shouldRepeatWithoutForwarding =
                 shouldRepeatPlusOneWithoutForwardHeader(chatActivity, selectedObject)
             val selectedObjectGroup =
-                findField(chatActivity.javaClass, "selectedObjectGroup").get(chatActivity)
+                TelegramObfuscationResolver.findChatSelectedObjectGroupField(chatActivity.javaClass).get(chatActivity)
 
             val messages = ArrayList<Any>()
             if (selectedObjectGroup != null) {
@@ -105,6 +133,8 @@ internal class PlusOneForwarder(
                 return
             }
 
+            Log.i("MxGram", "forwardSelectedMessageToCurrentChat: count=${messages.size}, withoutHeader=$shouldRepeatWithoutForwarding")
+
             if (replyRepeater.tryRepeatPendingOrForced(
                     chatActivity,
                     selectedObject,
@@ -116,18 +146,7 @@ internal class PlusOneForwarder(
             }
 
             // Prefer Telegram's internal sending path for forwarding inside the current chat.
-            val forwardMessages =
-                chatActivity.javaClass.declaredMethods.firstOrNull { method ->
-                    val params = method.parameterTypes
-                    method.name == "forwardMessages" &&
-                        params.size == 6 &&
-                        ArrayList::class.java.isAssignableFrom(params[0]) &&
-                        params[1] == java.lang.Boolean.TYPE &&
-                        params[2] == java.lang.Boolean.TYPE &&
-                        params[3] == java.lang.Boolean.TYPE &&
-                        params[4] == java.lang.Integer.TYPE &&
-                        params[5] == java.lang.Long.TYPE
-                }
+            val forwardMessages = TelegramObfuscationResolver.resolveForwardMessagesMethod(chatActivity.javaClass)
             if (forwardMessages != null) {
                 forwardMessages.isAccessible = true
                 forwardMessages.invoke(chatActivity, messages, false, false, true, 0, 0L)
@@ -136,12 +155,13 @@ internal class PlusOneForwarder(
 
             // Fallback: show the forward panel (user still needs to tap send).
             val showFieldPanelForForward =
-                chatActivity.javaClass.getMethod(
+                findMethodOrNull(
+                    chatActivity.javaClass,
                     "showFieldPanelForForward",
                     java.lang.Boolean.TYPE,
                     ArrayList::class.java,
                 )
-            showFieldPanelForForward.invoke(chatActivity, true, messages)
+            showFieldPanelForForward?.invoke(chatActivity, true, messages)
         } catch (t: Throwable) {
             logError("Failed to +1 forward message", t)
         }
@@ -165,6 +185,7 @@ internal class PlusOneForwarder(
         menuItemView: View,
     ): Boolean {
         try {
+            Log.i("MxGram", "onPlusOneLongPressed: preparing reply and clicking")
             replyRepeater.prepareReply(chatActivity)
             // Reuse Telegram's normal click flow (it will close the menu and clear selection state).
             menuItemView.performClick()
