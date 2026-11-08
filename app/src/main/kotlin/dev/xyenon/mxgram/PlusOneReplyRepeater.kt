@@ -24,7 +24,7 @@ internal class PlusOneReplyRepeater(
         // keeps the reply target, which Telegram cannot do with a forwarded (quoted) message.
         val pending = pendingPlusOneReply.getAndSet(null)
         return try {
-            if (pending != null && SystemClock.uptimeMillis() - pending.createdAtUptimeMs <= PLUS_ONE_REPLY_TTL_MS) {
+            if (pending != null && uptimeMillis() - pending.createdAtUptimeMs <= PLUS_ONE_REPLY_TTL_MS) {
                 val selectedIdentity = messageIdentity(selectedObject)
                 if (selectedIdentity == pending.selectedMessageIdentity) {
                     if (pending.replyToMsg != null && messages.size == 1) {
@@ -69,13 +69,13 @@ internal class PlusOneReplyRepeater(
                 return PendingPlusOneReply(null, selectedIdentity)
             }
 
-            val replyMsgId = selectedObject.javaClass.getMethod("getReplyMsgId").invoke(selectedObject) as Int
+            val replyMsgId = TelegramObfuscationResolver.getMessageReplyMsgId(selectedObject)
             if (replyMsgId <= 0) {
                 return PendingPlusOneReply(null, selectedIdentity)
             }
 
             // Only handle replies within the same dialog (reply_to_peer_id should be null).
-            val messageOwner = findField(selectedObject.javaClass, "messageOwner").get(selectedObject)
+            val messageOwner = TelegramObfuscationResolver.getMessageOwner(selectedObject)
             if (messageOwner != null) {
                 val replyHeader =
                     try {
@@ -96,7 +96,7 @@ internal class PlusOneReplyRepeater(
                 }
             }
 
-            val replyToMsg = findField(selectedObject.javaClass, "replyMessageObject").get(selectedObject)
+            val replyToMsg = TelegramObfuscationResolver.getReplyMessageObject(selectedObject)
             return PendingPlusOneReply(replyToMsg, selectedIdentity)
         } catch (_: Throwable) {
             return null
@@ -107,5 +107,12 @@ internal class PlusOneReplyRepeater(
 private data class PendingPlusOneReply(
     val replyToMsg: Any?,
     val selectedMessageIdentity: String,
-    val createdAtUptimeMs: Long = SystemClock.uptimeMillis(),
+    val createdAtUptimeMs: Long = uptimeMillis(),
 )
+
+private fun uptimeMillis(): Long =
+    try {
+        SystemClock.uptimeMillis()
+    } catch (_: Throwable) {
+        System.nanoTime() / 1_000_000L
+    }

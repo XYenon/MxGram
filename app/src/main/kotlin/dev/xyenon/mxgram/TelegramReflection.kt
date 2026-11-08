@@ -1,7 +1,17 @@
 package dev.xyenon.mxgram
 
+import android.content.Context
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+
+internal fun getApplicationContext(): Context? =
+    try {
+        val activityThreadClass = Class.forName("android.app.ActivityThread")
+        val currentApplicationMethod = activityThreadClass.getMethod("currentApplication")
+        currentApplicationMethod.invoke(null) as? Context
+    } catch (_: Throwable) {
+        null
+    }
 
 internal fun getStaticIntFieldValue(
     type: Class<*>,
@@ -19,19 +29,33 @@ internal fun getStaticIntFieldValue(
 internal fun resolveTelegramDrawable(
     classLoader: ClassLoader?,
     drawableName: String,
-    fallback: Int,
+    fallback: Int = 0,
+    context: Context? = null,
 ): Int {
-    if (classLoader == null) {
-        return fallback
+    val targetContext = context ?: getApplicationContext()
+    if (targetContext != null) {
+        try {
+            val id = targetContext.resources.getIdentifier(drawableName, "drawable", targetContext.packageName)
+            if (id != 0) return id
+        } catch (_: Throwable) {
+        }
     }
-    return try {
-        val drawableClass = Class.forName("org.telegram.messenger.R\$drawable", false, classLoader)
-        val field = drawableClass.getDeclaredField(drawableName)
-        field.isAccessible = true
-        field.getInt(null)
-    } catch (_: Throwable) {
-        fallback
+    if (classLoader != null) {
+        try {
+            val drawableClass = Class.forName("org.telegram.messenger.R\$drawable", false, classLoader)
+            val field = drawableClass.getDeclaredField(drawableName)
+            field.isAccessible = true
+            val id = field.getInt(null)
+            if (id != 0) return id
+        } catch (_: Throwable) {
+        }
     }
+    if (fallback == 0) {
+        if (drawableName == "msg_gallery") return 0x7f0805a7
+        if (drawableName == "msg_forward_replace") return 0x7f0805a6
+        if (drawableName == "popup_fixed_alert4") return 0x7f080737
+    }
+    return fallback
 }
 
 @Throws(Exception::class)
@@ -201,6 +225,18 @@ internal fun findMethodOrNull(
     } catch (_: Throwable) {
         null
     }
+
+internal fun findClassOrNull(
+    name: String,
+    classLoader: ClassLoader?,
+): Class<*>? {
+    if (classLoader == null) return null
+    return try {
+        Class.forName(name, false, classLoader)
+    } catch (_: Throwable) {
+        null
+    }
+}
 
 internal fun findMethodByNamesOrNull(
     type: Class<*>,

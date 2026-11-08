@@ -1,5 +1,6 @@
 package dev.xyenon.mxgram
 
+import android.content.Context
 import android.util.Log
 import android.view.View
 import java.util.WeakHashMap
@@ -44,17 +45,26 @@ internal class PlusOneForwarder(
 
         val optionForward = getStaticIntFieldValue(chatActivity.javaClass, "OPTION_FORWARD", 2)
         val forwardIndex = options.indexOf(optionForward)
-        if (forwardIndex < 0) {
-            return
-        }
+        val optionReply = getStaticIntFieldValue(chatActivity.javaClass, "OPTION_REPLY", 8)
+        val replyIndex = options.indexOf(optionReply)
+        val insertIndex =
+            when {
+                forwardIndex >= 0 -> min(forwardIndex + 1, options.size)
+                replyIndex >= 0 -> min(replyIndex + 1, options.size)
+                options.isNotEmpty() -> min(1, options.size)
+                else -> 0
+            }
 
-        val insertIndex = min(forwardIndex + 1, options.size)
-        val forwardIcon = if (forwardIndex < icons.size) icons[forwardIndex] else 0
+        val forwardIcon = if (forwardIndex in icons.indices) icons[forwardIndex] else 0
+        val context =
+            (findMethodOrNull(chatActivity.javaClass, "getParentActivity")?.invoke(chatActivity) as? Context)
+                ?: (chatActivity as? View)?.context
         val plusIcon =
             resolveTelegramDrawable(
                 chatActivity.javaClass.classLoader,
                 "msg_filled_plus",
                 forwardIcon,
+                context,
             )
 
         options.add(insertIndex, OPTION_PLUS_ONE)
@@ -62,6 +72,7 @@ internal class PlusOneForwarder(
         icons.add(min(insertIndex, icons.size), plusIcon)
 
         plusOneMenuIndex[chatActivity] = insertIndex
+        Log.i("MxGram", "addToMessageMenu: added +1 at index $insertIndex (options count=${options.size})")
     }
 
     fun attachLongPressToMenuItem(chatActivity: Any) {
@@ -123,9 +134,9 @@ internal class PlusOneForwarder(
 
             val messages = ArrayList<Any>()
             if (selectedObjectGroup != null) {
-                val groupMessages = findField(selectedObjectGroup.javaClass, "messages").get(selectedObjectGroup)
-                if (groupMessages is ArrayList<*>) {
-                    messages.addAll(groupMessages as ArrayList<Any>)
+                val groupMessages = TelegramObfuscationResolver.getGroupedMessagesList(selectedObjectGroup)
+                if (groupMessages != null) {
+                    messages.addAll(groupMessages.filterNotNull())
                 }
             } else {
                 messages.add(selectedObject)

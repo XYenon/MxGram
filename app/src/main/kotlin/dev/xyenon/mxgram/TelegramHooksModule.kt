@@ -61,8 +61,8 @@ class TelegramHooksModule : XposedModule() {
 
         installHookGroup("noforwards and message flag hooks") {
             val messagesControllerClass =
-                Class.forName("org.telegram.messenger.MessagesController", false, classLoader)
-            val messageObjectClass = Class.forName("org.telegram.messenger.MessageObject", false, classLoader)
+                TelegramObfuscationResolver.resolveMessagesController(classLoader)
+            val messageObjectClass = TelegramObfuscationResolver.resolveMessageObject(classLoader)
             val tlrpcMessageClass = Class.forName("org.telegram.tgnet.TLRPC\$Message", false, classLoader)
             hookNoForwardsRestrictions(messagesControllerClass)
             hookMessageNoForwardsFlag(messageObjectClass, tlrpcMessageClass)
@@ -71,7 +71,7 @@ class TelegramHooksModule : XposedModule() {
             installHookGroup("self-destruct media hooks") {
                 hookSelfDestructMediaProtection(
                     chatActivityClass,
-                    Class.forName("org.telegram.messenger.MessagesController", false, classLoader),
+                    TelegramObfuscationResolver.resolveMessagesController(classLoader),
                 )
             }
             installHookGroup("pull-down navigation hook") {
@@ -105,9 +105,10 @@ class TelegramHooksModule : XposedModule() {
             hookProfileIdDisplay(TelegramObfuscationResolver.resolveProfileActivity(classLoader))
         }
         installHookGroup("reply forward author hooks") {
+            val messageObjectClass = TelegramObfuscationResolver.resolveMessageObject(classLoader)
             hookReplyForwardAuthor(
                 TelegramObfuscationResolver.resolveChatMessageCell(classLoader),
-                Class.forName("org.telegram.messenger.MessageObject", false, classLoader),
+                messageObjectClass,
             )
         }
     }
@@ -117,8 +118,10 @@ class TelegramHooksModule : XposedModule() {
         messageObjectClass: Class<*>,
     ) {
         val setMessageObjectInternal =
-            chatMessageCellClass.getDeclaredMethod("setMessageObjectInternal", messageObjectClass)
-        val getForwardedName = messageObjectClass.getDeclaredMethod("getForwardedName")
+            chatMessageCellClass.declaredMethods.firstOrNull {
+                it.name == "setMessageObjectInternal" && it.parameterCount == 1 && it.parameterTypes[0] == messageObjectClass
+            } ?: chatMessageCellClass.getDeclaredMethod("setMessageObjectInternal", messageObjectClass)
+        val getForwardedName = TelegramObfuscationResolver.resolveGetForwardedNameMethod(messageObjectClass)
         setMessageObjectInternal.isAccessible = true
         getForwardedName.isAccessible = true
         hook(setMessageObjectInternal).intercept(ReplyLayoutHooker())
@@ -138,23 +141,13 @@ class TelegramHooksModule : XposedModule() {
 
     private fun hookNoForwardsRestrictions(messagesControllerClass: Class<*>) {
         try {
-            var hooked = 0
-            for (method in messagesControllerClass.declaredMethods) {
-                if (method.parameterCount != 1 || method.returnType != java.lang.Boolean.TYPE) {
-                    continue
-                }
-                if (
-                    method.name != "isChatNoForwards" &&
-                    method.name != "isUserNoForwards" &&
-                    method.name != "isPeerNoForwards"
-                ) {
-                    continue
-                }
+            val methods = TelegramObfuscationResolver.resolveNoForwardsMethods(messagesControllerClass)
+            for (method in methods) {
                 method.isAccessible = true
                 hook(method).intercept(NoForwardsBypassHooker())
-                hooked += 1
             }
-            check(hooked > 0) { "MessagesController noforwards methods not found" }
+            check(methods.isNotEmpty()) { "MessagesController noforwards methods not found" }
+            logInfo("Hooked ${methods.size} noforwards methods in MessagesController")
         } catch (t: Throwable) {
             logError("Failed to install noforwards bypass hook", t)
         }
@@ -204,35 +197,31 @@ class TelegramHooksModule : XposedModule() {
         }
         installHookGroup("content read delete-task hook") {
             val markMessageAsRead2 =
-                messagesControllerClass.declaredMethods.firstOrNull { method ->
-                    method.name == "markMessageAsRead2" && method.parameterCount == 6
-                } ?: throw IllegalStateException("MessagesController.markMessageAsRead2(...) not found")
+                TelegramObfuscationResolver.resolveMarkMessageAsRead2Method(messagesControllerClass)
             markMessageAsRead2.isAccessible = true
             hook(markMessageAsRead2).intercept(PreventDeleteTaskOnContentReadHooker())
+            logInfo("Hooked markMessageAsRead2: $markMessageAsRead2")
         }
         installHookGroup("secret chat delete-task hook") {
             val markMessageAsRead =
-                messagesControllerClass.declaredMethods.firstOrNull { method ->
-                    method.name == "markMessageAsRead" && method.parameterCount == 3
-                } ?: throw IllegalStateException("MessagesController.markMessageAsRead(...) not found")
+                TelegramObfuscationResolver.resolveMarkMessageAsReadMethod(messagesControllerClass)
             markMessageAsRead.isAccessible = true
             hook(markMessageAsRead).intercept(PreventDeleteTaskOnSecretChatReadHooker())
+            logInfo("Hooked markMessageAsRead: $markMessageAsRead")
         }
         installHookGroup("show-once task creation hook") {
             val createDeleteShowOnceTask =
-                messagesControllerClass.declaredMethods.firstOrNull { method ->
-                    method.name == "createDeleteShowOnceTask" && method.parameterCount == 2
-                } ?: throw IllegalStateException("MessagesController.createDeleteShowOnceTask(...) not found")
+                TelegramObfuscationResolver.resolveCreateDeleteShowOnceTaskMethod(messagesControllerClass)
             createDeleteShowOnceTask.isAccessible = true
             hook(createDeleteShowOnceTask).intercept(BlockCreateDeleteShowOnceTaskHooker())
+            logInfo("Hooked createDeleteShowOnceTask: $createDeleteShowOnceTask")
         }
         installHookGroup("show-once task execution hook") {
             val doDeleteShowOnceTask =
-                messagesControllerClass.declaredMethods.firstOrNull { method ->
-                    method.name == "doDeleteShowOnceTask" && method.parameterCount == 3
-                } ?: throw IllegalStateException("MessagesController.doDeleteShowOnceTask(...) not found")
+                TelegramObfuscationResolver.resolveDoDeleteShowOnceTaskMethod(messagesControllerClass)
             doDeleteShowOnceTask.isAccessible = true
             hook(doDeleteShowOnceTask).intercept(BlockDoDeleteShowOnceTaskHooker())
+            logInfo("Hooked doDeleteShowOnceTask: $doDeleteShowOnceTask")
         }
     }
 
@@ -392,11 +381,20 @@ class TelegramHooksModule : XposedModule() {
         messageObject: Any,
         readNow: Boolean,
     ): Runnable? {
-        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return null
-        val destroyTime = findField(messageOwner.javaClass, "destroyTime").getInt(messageOwner)
-        val ttl = findField(messageOwner.javaClass, "ttl").getInt(messageOwner)
-        val isOut = findMethod(messageObject.javaClass, "isOut").invoke(messageObject) == true
-        val isSecretMedia = findMethod(messageObject.javaClass, "isSecretMedia").invoke(messageObject) == true
+        val messageOwner = TelegramObfuscationResolver.getMessageOwner(messageObject) ?: return null
+        val destroyTime = findFieldOrNull(messageOwner.javaClass, "destroyTime")?.getInt(messageOwner) ?: 0
+        val ttl = findFieldOrNull(messageOwner.javaClass, "ttl")?.getInt(messageOwner) ?: 0
+        val isOut =
+            findFieldOrNull(messageOwner.javaClass, "out")?.getBoolean(messageOwner)
+                ?: (findMethodOrNull(messageObject.javaClass, "isOut")?.invoke(messageObject) == true)
+        val isSecretMedia =
+            findMethodOrNull(messageObject.javaClass, "isSecretMedia")?.let {
+                it.invoke(messageObject) == true
+            } ?: run {
+                val media = findFieldOrNull(messageOwner.javaClass, "media")?.get(messageOwner)
+                val ttlSeconds = media?.let { findFieldOrNull(it.javaClass, "ttl_seconds")?.getInt(it) } ?: 0
+                media != null && (ttlSeconds != 0 || ttl > 0)
+            }
         if (isOut || !isSecretMedia || destroyTime != 0 || ttl <= 0) {
             return null
         }
@@ -549,27 +547,23 @@ class TelegramHooksModule : XposedModule() {
         val messagesController =
             findMethodOrNull(chatActivity.javaClass, "getMessagesController")?.invoke(chatActivity)
                 ?: return
-        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return
+        val messageOwner = TelegramObfuscationResolver.getMessageOwner(messageObject) ?: return
         val ttl = findField(messageOwner.javaClass, "ttl").getInt(messageOwner)
         val normalizedTtl = if (ttl == Int.MAX_VALUE) 0 else ttl
 
         if (currentEncryptedChat != null) {
             val randomId = findField(messageOwner.javaClass, "random_id").getLong(messageOwner)
             val markMessageAsRead =
-                messagesController.javaClass.declaredMethods.firstOrNull { method ->
-                    method.name == "markMessageAsRead" && method.parameterCount == 3
-                } ?: throw IllegalStateException("MessagesController.markMessageAsRead(...) not found")
+                TelegramObfuscationResolver.resolveMarkMessageAsReadMethod(messagesController.javaClass)
             markMessageAsRead.isAccessible = true
             val readReceiptTtl = if (normalizedTtl > 0) Int.MIN_VALUE else normalizedTtl
-            markMessageAsRead.invoke(messagesController, dialogId, randomId, readReceiptTtl)
+            markMessageAsRead.invoke(messagesController, dialogId, readReceiptTtl, randomId)
             return
         }
 
-        val messageId = (findMethod(messageObject.javaClass, "getId").invoke(messageObject) as Number).toInt()
+        val messageId = TelegramObfuscationResolver.getMessageId(messageObject)
         val markMessageAsRead2 =
-            messagesController.javaClass.declaredMethods.firstOrNull { method ->
-                method.name == "markMessageAsRead2" && method.parameterCount == 6
-            } ?: throw IllegalStateException("MessagesController.markMessageAsRead2(...) not found")
+            TelegramObfuscationResolver.resolveMarkMessageAsRead2Method(messagesController.javaClass)
         markMessageAsRead2.isAccessible = true
         markMessageAsRead2.invoke(messagesController, dialogId, messageId, null, normalizedTtl, 0L, false)
     }

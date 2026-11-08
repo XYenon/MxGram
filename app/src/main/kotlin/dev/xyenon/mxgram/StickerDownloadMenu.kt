@@ -51,7 +51,7 @@ internal class StickerDownloadMenu(
                 } catch (_: Throwable) {
                     null
                 }
-            ) ?: args.firstOrNull()?.takeIf { it.javaClass.name.endsWith("MessageObject") }
+            ) ?: args.firstOrNull()?.takeIf { TelegramObfuscationResolver.isMessageObject(it) }
                 ?: return
         if (!isSaveableStickerMessage(selectedObject)) {
             Log.d("MxGram", "addToMessageMenu: message is not saveable sticker: $selectedObject")
@@ -59,18 +59,22 @@ internal class StickerDownloadMenu(
         }
 
         val insertIndex = stickerMenuInsertIndex(options, chatActivity.javaClass)
+        val context =
+            (findMethodOrNull(chatActivity.javaClass, "getParentActivity")?.invoke(chatActivity) as? Context)
+                ?: (chatActivity as? View)?.context
         val galleryIcon =
             resolveTelegramDrawable(
                 chatActivity.javaClass.classLoader,
                 "msg_gallery",
                 0,
+                context,
             )
-        val label = resolveSaveToGalleryLabel(chatActivity.javaClass.classLoader)
+        val label = resolveSaveToGalleryLabel(chatActivity.javaClass.classLoader, context)
 
         options.add(insertIndex, OPTION_SAVE_STICKER)
         items.add(insertIndex, label)
         icons.add(minOf(insertIndex, icons.size), galleryIcon)
-        Log.d("MxGram", "addToMessageMenu: added save sticker option at index $insertIndex")
+        Log.d("MxGram", "addToMessageMenu: added save sticker option at index $insertIndex, icon=0x${Integer.toHexString(galleryIcon)}")
     }
 
     fun handleSelectedOption(
@@ -131,8 +135,7 @@ internal class StickerDownloadMenu(
             }
             val currentDocument = TelegramObfuscationResolver.findContentPreviewCurrentDocumentField(viewer.javaClass).get(viewer) ?: return
             val classLoader = viewer.javaClass.classLoader ?: return
-            val messageObjectClass = classLoader.loadClass("org.telegram.messenger.MessageObject")
-            if (invokeStaticBoolean(messageObjectClass, "isMaskDocument", arrayOf(currentDocument))) {
+            if (isMaskDocument(currentDocument)) {
                 return
             }
             val activity =
@@ -284,8 +287,8 @@ internal class StickerDownloadMenu(
                     addItem.invoke(
                         null,
                         host,
-                        resolveTelegramDrawable(classLoader, "msg_gallery", 0),
-                        resolveSaveToGalleryLabel(classLoader),
+                        resolveTelegramDrawable(classLoader, "msg_gallery", 0, host.context),
+                        resolveSaveToGalleryLabel(classLoader, host.context),
                         false,
                         resourcesProvider,
                     ) as? View
@@ -297,8 +300,9 @@ internal class StickerDownloadMenu(
 
         val subItemClass = TelegramObfuscationResolver.resolveActionBarMenuSubItem(classLoader)
         val cell = instantiateMenuSubItem(subItemClass, host.context, resourcesProvider) ?: return null
-        val icon = resolveTelegramDrawable(classLoader, "msg_gallery", 0)
-        val text = resolveSaveToGalleryLabel(classLoader)
+        val icon = resolveTelegramDrawable(classLoader, "msg_gallery", 0, host.context)
+        val text = resolveSaveToGalleryLabel(classLoader, host.context)
+        Log.d("MxGram", "createMenuSubItem: resolved icon=0x${Integer.toHexString(icon)}, text=$text")
 
         val setTextAndIcon =
             findMethodOrNull(subItemClass, "setTextAndIcon", CharSequence::class.java, java.lang.Integer.TYPE)
@@ -440,7 +444,7 @@ internal class StickerDownloadMenu(
             findMethodOrNull(popupClass, "setOutsideTouchable", java.lang.Boolean.TYPE)?.invoke(popup, true)
             findMethodOrNull(popupClass, "setClippingEnabled", java.lang.Boolean.TYPE)?.invoke(popup, true)
             findMethodOrNull(popupClass, "setAnimationStyle", java.lang.Integer.TYPE)
-                ?.invoke(popup, resolveTelegramStyle(classLoader, "PopupContextAnimation"))
+                ?.invoke(popup, resolveTelegramStyle(classLoader, "PopupContextAnimation", containerView.context))
             findMethodOrNull(popupClass, "setFocusable", java.lang.Boolean.TYPE)?.invoke(popup, true)
             previewMenu.measure(
                 View.MeasureSpec.makeMeasureSpec(dp(classLoader, 1000f), View.MeasureSpec.AT_MOST),
@@ -476,7 +480,7 @@ internal class StickerDownloadMenu(
         resourcesProvider: Any?,
         classLoader: ClassLoader,
     ): ViewGroup? {
-        val bgDrawableRes = resolveTelegramDrawable(classLoader, "popup_fixed_alert4", 0)
+        val bgDrawableRes = resolveTelegramDrawable(classLoader, "popup_fixed_alert4", 0, context)
         for (constructor in layoutClass.constructors) {
             val params = constructor.parameterTypes
             val instance =
@@ -596,22 +600,35 @@ internal class StickerDownloadMenu(
         classLoader: ClassLoader,
         value: Float,
     ): Int {
-        val androidUtilities = Class.forName("org.telegram.messenger.AndroidUtilities", false, classLoader)
-        return androidUtilities.getMethod("dp", java.lang.Float.TYPE).invoke(null, value) as Int
+        val density =
+            android.content.res.Resources
+                .getSystem()
+                .displayMetrics.density
+        return Math.ceil((density * value).toDouble()).toInt()
     }
 
     private fun resolveTelegramStyle(
         classLoader: ClassLoader,
         name: String,
-    ): Int =
-        try {
+        context: Context? = null,
+    ): Int {
+        val targetContext = context ?: getApplicationContext()
+        if (targetContext != null) {
+            try {
+                val id = targetContext.resources.getIdentifier(name, "style", targetContext.packageName)
+                if (id != 0) return id
+            } catch (_: Throwable) {
+            }
+        }
+        return try {
             Class
                 .forName("org.telegram.messenger.R\$style", false, classLoader)
                 .getDeclaredField(name)
                 .getInt(null)
         } catch (_: Throwable) {
-            0
+            if (name == "PopupContextAnimation") 0x7f1000b8 else 0
         }
+    }
 
     private fun dismissPreviewPopup(viewer: Any) {
         try {
@@ -856,15 +873,43 @@ internal class StickerDownloadMenu(
         }
     }
 
+    private fun isMaskDocument(document: Any): Boolean {
+        val attributes = (findFieldOrNull(document.javaClass, "attributes")?.get(document) as? List<*>) ?: return false
+        for (attr in attributes) {
+            if (attr != null && attr.javaClass.name.endsWith("TL_documentAttributeSticker")) {
+                if (findFieldOrNull(attr.javaClass, "mask")?.getBoolean(attr) == true) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private fun isSaveableStickerMessage(messageObject: Any): Boolean {
-        if (invokeInstanceBoolean(messageObject, "isAnimatedEmoji")) {
-            return false
+        if (findMethodOrNull(messageObject.javaClass, "isSticker") != null) {
+            if (invokeInstanceBoolean(messageObject, "isAnimatedEmoji") || invokeInstanceBoolean(messageObject, "isMask")) {
+                return false
+            }
+            return invokeInstanceBoolean(messageObject, "isSticker") ||
+                invokeInstanceBoolean(messageObject, "isAnimatedSticker")
         }
-        if (invokeInstanceBoolean(messageObject, "isMask")) {
-            return false
+        val document = TelegramObfuscationResolver.getDocument(messageObject) ?: return false
+        val attributes = (findFieldOrNull(document.javaClass, "attributes")?.get(document) as? List<*>) ?: return false
+        var isSticker = false
+        for (attr in attributes) {
+            if (attr == null) continue
+            val className = attr.javaClass.name
+            if (className.endsWith("TL_documentAttributeCustomEmoji")) {
+                return false
+            }
+            if (className.endsWith("TL_documentAttributeSticker")) {
+                if (findFieldOrNull(attr.javaClass, "mask")?.getBoolean(attr) == true) {
+                    return false
+                }
+                isSticker = true
+            }
         }
-        return invokeInstanceBoolean(messageObject, "isSticker") ||
-            invokeInstanceBoolean(messageObject, "isAnimatedSticker")
+        return isSticker
     }
 
     private fun stickerMenuInsertIndex(
@@ -894,19 +939,32 @@ internal class StickerDownloadMenu(
         return options.size
     }
 
-    private fun resolveSaveToGalleryLabel(classLoader: ClassLoader?): CharSequence {
-        if (classLoader == null) {
-            return "Save to gallery"
+    private fun resolveSaveToGalleryLabel(
+        classLoader: ClassLoader?,
+        context: Context? = null,
+    ): CharSequence {
+        if (classLoader != null) {
+            try {
+                val localeControllerClass = findClassOrNull("org.telegram.messenger.LocaleController", classLoader)
+                if (localeControllerClass != null) {
+                    val getStringMethod = localeControllerClass.getMethod("getString", String::class.java)
+                    val result = getStringMethod.invoke(null, "SaveToGallery") as? String
+                    if (!result.isNullOrEmpty() && !result.startsWith("LOC_ERR")) {
+                        return result
+                    }
+                }
+            } catch (_: Throwable) {
+            }
         }
-        return try {
-            val localeControllerClass = Class.forName("org.telegram.messenger.LocaleController", false, classLoader)
-            val stringClass = Class.forName("org.telegram.messenger.R\$string", false, classLoader)
-            val resId = stringClass.getDeclaredField("SaveToGallery").getInt(null)
-            val getString = localeControllerClass.getMethod("getString", Int::class.javaPrimitiveType)
-            getString.invoke(null, resId) as? CharSequence ?: "Save to gallery"
-        } catch (_: Throwable) {
-            "Save to gallery"
+        val targetContext = context ?: getApplicationContext()
+        if (targetContext != null) {
+            try {
+                val id = targetContext.resources.getIdentifier("SaveToGallery", "string", targetContext.packageName)
+                if (id != 0) return targetContext.getString(id)
+            } catch (_: Throwable) {
+            }
         }
+        return "Save to gallery"
     }
 
     private fun invokeInstanceBoolean(

@@ -61,12 +61,14 @@ internal class ProfileIdDisplay(
 
     private fun viewFor(profileActivity: Any): TextView? {
         val profileFields = fieldsFor(profileActivity)
+        val rawOnline = profileFields.onlineTextView?.get(profileActivity)
         val onlineView =
-            (profileFields.onlineTextView.get(profileActivity) as? Array<*>)
-                ?.getOrNull(1) as? View
+            (rawOnline as? View)
+                ?: (rawOnline as? Array<*>)?.getOrNull(1) as? View
+        val rawName = profileFields.nameTextView?.get(profileActivity)
         val nameView =
-            (profileFields.nameTextView?.get(profileActivity) as? Array<*>)
-                ?.getOrNull(1) as? View
+            (rawName as? View)
+                ?: (rawName as? Array<*>)?.getOrNull(1) as? View
 
         val container =
             (onlineView?.parent as? ViewGroup)
@@ -168,7 +170,10 @@ internal class ProfileIdDisplay(
         if (id == 0L) {
             try {
                 val dialogId =
-                    findMethodOrNull(profileActivity.javaClass, "getDialogId")?.invoke(profileActivity) as? Long ?: 0L
+                    (
+                        TelegramObfuscationResolver.resolveProfileGetDialogIdMethodOrNull(profileActivity.javaClass)
+                            ?: findMethodOrNull(profileActivity.javaClass, "getDialogId")
+                    )?.invoke(profileActivity) as? Long ?: 0L
                 if (dialogId != 0L) {
                     id = dialogId
                     Log.i(TAG, "updateText (method): dialogId=$dialogId")
@@ -230,18 +235,30 @@ internal class ProfileIdDisplay(
             val messagesController =
                 findMethodOrNull(profileActivity.javaClass, "getMessagesController")?.invoke(profileActivity)
             if (messagesController != null) {
+                val getChatMethod =
+                    TelegramObfuscationResolver.resolveMessagesControllerGetChatMethod(messagesController.javaClass)
+                        ?: findMethodOrNull(messagesController.javaClass, "getChat", java.lang.Long::class.java)
+                        ?: findMethodOrNull(messagesController.javaClass, "getChat", java.lang.Long.TYPE)
                 val chat =
-                    (
-                        findMethodOrNull(messagesController.javaClass, "getChat", java.lang.Long::class.java)
-                            ?: findMethodOrNull(messagesController.javaClass, "getChat", java.lang.Long.TYPE)
-                    )?.invoke(messagesController, chatId)
+                    getChatMethod?.let {
+                        if (it.parameterTypes[0] == java.lang.Long.TYPE) {
+                            it.invoke(messagesController, chatId)
+                        } else {
+                            it.invoke(messagesController, java.lang.Long.valueOf(chatId))
+                        }
+                    }
                 if (chat != null) {
                     val isChannel =
                         chat.javaClass.name.contains("Channel", ignoreCase = true) ||
+                            findFieldOrNull(chat.javaClass, "broadcast")?.getBoolean(chat) == true ||
                             try {
                                 val chatObjectClass =
-                                    Class.forName("org.telegram.messenger.ChatObject", false, chat.javaClass.classLoader)
-                                invokeStaticBoolean(chatObjectClass, "isChannel", arrayOf(chat))
+                                    findClassOrNull("org.telegram.messenger.ChatObject", chat.javaClass.classLoader)
+                                if (chatObjectClass != null) {
+                                    invokeStaticBoolean(chatObjectClass, "isChannel", arrayOf(chat))
+                                } else {
+                                    false
+                                }
                             } catch (_: Throwable) {
                                 false
                             }
@@ -264,11 +281,18 @@ internal class ProfileIdDisplay(
                 val messagesController =
                     findMethodOrNull(profileActivity.javaClass, "getMessagesController")?.invoke(profileActivity)
                 if (messagesController != null) {
+                    val getUserMethod =
+                        TelegramObfuscationResolver.resolveMessagesControllerGetUserMethod(messagesController.javaClass)
+                            ?: findMethodOrNull(messagesController.javaClass, "getUser", java.lang.Long::class.java)
+                            ?: findMethodOrNull(messagesController.javaClass, "getUser", java.lang.Long.TYPE)
                     val user =
-                        (
-                            findMethodOrNull(messagesController.javaClass, "getUser", java.lang.Long::class.java)
-                                ?: findMethodOrNull(messagesController.javaClass, "getUser", java.lang.Long.TYPE)
-                        )?.invoke(messagesController, id)
+                        getUserMethod?.let {
+                            if (it.parameterTypes[0] == java.lang.Long.TYPE) {
+                                it.invoke(messagesController, id)
+                            } else {
+                                it.invoke(messagesController, java.lang.Long.valueOf(id))
+                            }
+                        }
                     if (user != null) {
                         val photo = findFieldOrNull(user.javaClass, "photo")?.get(user)
                         if (photo != null) {
@@ -300,12 +324,14 @@ internal class ProfileIdDisplay(
         }
 
         val profileFields = fieldsFor(profileActivity)
+        val rawOnline = profileFields.onlineTextView?.get(profileActivity)
         val onlineView =
-            (profileFields.onlineTextView.get(profileActivity) as? Array<*>)
-                ?.getOrNull(1) as? View
+            (rawOnline as? View)
+                ?: (rawOnline as? Array<*>)?.getOrNull(1) as? View
+        val rawName = profileFields.nameTextView?.get(profileActivity)
         val nameView =
-            (profileFields.nameTextView?.get(profileActivity) as? Array<*>)
-                ?.getOrNull(1) as? View
+            (rawName as? View)
+                ?: (rawName as? Array<*>)?.getOrNull(1) as? View
 
         val anchorView: View? =
             when {
@@ -366,47 +392,6 @@ internal class ProfileIdDisplay(
         val verticalOffset = if (anchorView === nameView) dpFloat(26f) else dpFloat(16.5f)
         val targetY = anchorView.y + verticalOffset
 
-        // Fade based on header collapse: when the anchor view approaches the action bar,
-        // the header is collapsing and the ID should fade out. This replaces the original
-        // extraHeight-based fade with a position-based proxy that doesn't require resolving
-        // the obfuscated extraHeight field.
-        val actionBarHeight =
-            try {
-                val actionBar = profileActivity.javaClass.getMethod("getActionBar").invoke(profileActivity)
-                val abHeight = actionBar?.javaClass?.getMethod("getHeight")?.invoke(actionBar) as? Int ?: dp(56f)
-                val statusBar = actionBar?.javaClass?.getMethod("getOccupyStatusBar")?.invoke(actionBar) as? Boolean ?: false
-                val statusBarHeight =
-                    if (statusBar) {
-                        val resId =
-                            android.content.res.Resources
-                                .getSystem()
-                                .getIdentifier("status_bar_height", "dimen", "android")
-                        if (resId > 0) {
-                            android.content.res.Resources
-                                .getSystem()
-                                .getDimensionPixelSize(resId)
-                        } else {
-                            dp(24f)
-                        }
-                    } else {
-                        0
-                    }
-                abHeight + statusBarHeight
-            } catch (_: Throwable) {
-                dp(56f) + dp(24f)
-            }
-
-        val fadeByHeight =
-            run {
-                // anchorView.y is relative to its container (avatarContainer2), which starts at the top.
-                // When the idView's targetY is close to the actionBar bottom, fade out.
-                val idBottom = targetY + idHeight
-                val margin = idBottom - actionBarHeight
-                val fadeRange = dpFloat(40f)
-                val raw = (margin / fadeRange).coerceIn(0f, 1f)
-                raw * raw * (3f - 2f * raw)
-            }
-
         // Fade based on distance to content card below (hides when scrolled up and overlapping content)
         val parentView = container?.parent as? ViewGroup
         val listView: ViewGroup? =
@@ -454,7 +439,7 @@ internal class ProfileIdDisplay(
                 1.0f
             }
 
-        val scrollFade = minOf(fadeByHeight, fadeByDistance)
+        val scrollFade = fadeByDistance
         // Use anchor view's own alpha (Telegram already animates it during expand/collapse)
         val finalAlpha = anchorView.alpha * scrollFade
 
@@ -472,7 +457,7 @@ internal class ProfileIdDisplay(
             "text='${idView.text}' vis=${idView.visibility} alpha=${idView.alpha} " +
                 "x=${idView.x} y=${idView.y} w=${idView.width} h=${idView.height} color=${Integer.toHexString(color)} | " +
                 "anchor=${anchorView.javaClass.simpleName} ax=${anchorView.x} ay=${anchorView.y} progress=$smoothProgress " +
-                "fade=$scrollFade fadeH=$fadeByHeight fadeD=$fadeByDistance dist=$distance " +
+                "fade=$scrollFade fadeD=$fadeByDistance dist=$distance " +
                 "avis=${anchorView.visibility} aalpha=${anchorView.alpha}"
         if (logKey != lastPresentationLog) {
             lastPresentationLog = logKey
@@ -539,7 +524,7 @@ internal class ProfileIdDisplay(
         fields.getOrPut(profileActivity.javaClass) {
             val type = profileActivity.javaClass
             ProfileFields(
-                onlineTextView = TelegramObfuscationResolver.findProfileOnlineTextViewField(profileActivity),
+                onlineTextView = TelegramObfuscationResolver.findProfileOnlineTextViewFieldOrNull(profileActivity),
                 nameTextView = TelegramObfuscationResolver.findProfileNameTextViewFieldOrNull(profileActivity),
                 userId = TelegramObfuscationResolver.findProfileUserIdFieldOrNull(type),
                 chatId = TelegramObfuscationResolver.findProfileChatIdFieldOrNull(type),
@@ -560,7 +545,7 @@ internal class ProfileIdDisplay(
                 .displayMetrics.density
 
     private data class ProfileFields(
-        val onlineTextView: Field,
+        val onlineTextView: Field?,
         val nameTextView: Field?,
         val userId: Field?,
         val chatId: Field?,

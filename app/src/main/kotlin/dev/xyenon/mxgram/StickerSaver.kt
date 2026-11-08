@@ -99,42 +99,48 @@ internal class StickerSaver(
             return
         }
         val mediaControllerClass = Class.forName("org.telegram.messenger.MediaController", false, classLoader)
-        val callbackClass = Class.forName("org.telegram.messenger.Utilities\$Callback", false, classLoader)
-        val callback =
-            if (onSaved == null) {
-                null
-            } else {
-                Proxy.newProxyInstance(classLoader, arrayOf(callbackClass)) { _, method, _ ->
-                    if (method.name == "run") {
-                        onSaved()
-                    }
-                    null
-                }
-            }
         val saveFile =
             mediaControllerClass.declaredMethods.firstOrNull { method ->
                 val params = method.parameterTypes
-                method.name == "saveFile" &&
-                    params.size == 7 &&
+                (
+                    method.name == "saveFile" ||
+                        java.lang.reflect.Modifier
+                            .isStatic(method.modifiers)
+                ) &&
+                    params.size in 6..7 &&
                     params[0] == String::class.java &&
                     params[1].isAssignableFrom(activity.javaClass) &&
-                    params[2] == java.lang.Integer.TYPE &&
-                    params[5] == callbackClass &&
-                    params[6] == java.lang.Boolean.TYPE
+                    params[2] == java.lang.Integer.TYPE
             } ?: run {
                 Log.w(TAG, "saveToGallery: MediaController.saveFile method not found")
                 return
             }
         saveFile.isAccessible = true
+        val callbackType = saveFile.parameterTypes[5]
+        val callback =
+            if (onSaved == null) {
+                null
+            } else {
+                Proxy.newProxyInstance(classLoader, arrayOf(callbackType)) { _, method, _ ->
+                    if (method.name == "run" || method.name == "accept") {
+                        onSaved()
+                    }
+                    null
+                }
+            }
         Log.i(TAG, "saveToGallery: saving sticker to gallery: $path ($mimeType)")
-        saveFile.invoke(null, path, activity, GALLERY_SAVE_TYPE, null, mimeType, callback, true)
+        if (saveFile.parameterCount == 7) {
+            saveFile.invoke(null, path, activity, GALLERY_SAVE_TYPE, null, mimeType, callback, true)
+        } else {
+            saveFile.invoke(null, path, activity, GALLERY_SAVE_TYPE, null, mimeType, callback)
+        }
     }
 
     private fun resolveMessageMimeType(
         messageObject: Any,
         classLoader: ClassLoader?,
     ): String? {
-        val document = runCatching { findMethod(messageObject.javaClass, "getDocument").invoke(messageObject) }.getOrNull()
+        val document = TelegramObfuscationResolver.getDocument(messageObject)
         return resolveDocumentMimeType(document)
     }
 
@@ -154,31 +160,37 @@ internal class StickerSaver(
         if (classLoader == null) {
             return null
         }
-        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return null
-        var path = findField(messageOwner.javaClass, "attachPath").get(messageOwner) as? String
+        val messageOwner = TelegramObfuscationResolver.getMessageOwner(messageObject) ?: return null
+        var path = runCatching { findField(messageOwner.javaClass, "attachPath").get(messageOwner) as? String }.getOrNull()
         if (!path.isNullOrEmpty() && File(path).exists()) {
             return path
         }
         val account = resolveMessageAccount(messageObject) ?: resolveCurrentAccount(classLoader)
-        val fileLoaderClass = Class.forName("org.telegram.messenger.FileLoader", false, classLoader)
-        val getInstance = fileLoaderClass.getMethod("getInstance", Int::class.javaPrimitiveType)
-        val fileLoader = getInstance.invoke(null, account)
-        val getPathToMessage =
-            fileLoaderClass.getMethod(
-                "getPathToMessage",
-                Class.forName("org.telegram.tgnet.TLRPC\$Message", false, classLoader),
-            )
-        path = (getPathToMessage.invoke(fileLoader, messageOwner) as? File)?.absolutePath
-        if (!path.isNullOrEmpty() && File(path).exists()) {
-            return path
+        val fileLoaderClass = TelegramObfuscationResolver.resolveFileLoader(classLoader)
+        val getPathToMessage = TelegramObfuscationResolver.resolveGetPathToMessageMethod(fileLoaderClass, classLoader)
+        if (getPathToMessage != null) {
+            val fileLoader = TelegramObfuscationResolver.resolveFileLoaderInstance(fileLoaderClass, account)
+            path =
+                (
+                    if (java.lang.reflect.Modifier
+                            .isStatic(getPathToMessage.modifiers)
+                    ) {
+                        getPathToMessage.invoke(null, messageOwner)
+                    } else {
+                        getPathToMessage.invoke(fileLoader, messageOwner)
+                    } as? File
+                )?.absolutePath
+            if (!path.isNullOrEmpty() && File(path).exists()) {
+                return path
+            }
         }
-        val document = findMethod(messageObject.javaClass, "getDocument").invoke(messageObject) ?: return null
+        val document = TelegramObfuscationResolver.getDocument(messageObject) ?: return null
         return resolveDocumentPath(document, classLoader, account)
     }
 
     private fun resolveMessageAccount(messageObject: Any): Int? =
         try {
-            findField(messageObject.javaClass, "currentAccount").getInt(messageObject)
+            findFieldOrNull(messageObject.javaClass, "currentAccount")?.getInt(messageObject)
         } catch (_: Throwable) {
             null
         }
@@ -191,16 +203,19 @@ internal class StickerSaver(
         if (classLoader == null) {
             return null
         }
-        val fileLoaderClass = Class.forName("org.telegram.messenger.FileLoader", false, classLoader)
-        val getInstance = fileLoaderClass.getMethod("getInstance", Int::class.javaPrimitiveType)
-        val fileLoader = getInstance.invoke(null, account)
-        val getPathToAttach =
-            fileLoaderClass.getMethod(
-                "getPathToAttach",
-                Class.forName("org.telegram.tgnet.TLObject", false, classLoader),
-                java.lang.Boolean.TYPE,
-            )
-        val file = getPathToAttach.invoke(fileLoader, document, true) as? File ?: return null
+        val fileLoaderClass = TelegramObfuscationResolver.resolveFileLoader(classLoader)
+        val getPathToAttach = TelegramObfuscationResolver.resolveGetPathToAttachMethod(fileLoaderClass, classLoader) ?: return null
+        val fileLoader = TelegramObfuscationResolver.resolveFileLoaderInstance(fileLoaderClass, account)
+        val file =
+            (
+                if (java.lang.reflect.Modifier
+                        .isStatic(getPathToAttach.modifiers)
+                ) {
+                    getPathToAttach.invoke(null, document, true)
+                } else {
+                    getPathToAttach.invoke(fileLoader, document, true)
+                }
+            ) as? File ?: return null
         return if (file.exists()) file.absolutePath else null
     }
 
@@ -209,9 +224,12 @@ internal class StickerSaver(
             return 0
         }
         return try {
-            val userConfigClass = Class.forName("org.telegram.messenger.UserConfig", false, classLoader)
-            val selectedAccountField = userConfigClass.getDeclaredField("selectedAccount")
-            selectedAccountField.isAccessible = true
+            val userConfigClass =
+                findClassOrNull("org.telegram.messenger.UserConfig", classLoader)
+                    ?: return 0
+            val selectedAccountField =
+                findFieldOrNull(userConfigClass, "selectedAccount")
+                    ?: return 0
             selectedAccountField.getInt(null)
         } catch (_: Throwable) {
             0

@@ -6,8 +6,8 @@ import java.util.concurrent.ConcurrentHashMap
 /** Stable key for a message; survives new [MessageObject] instances for the same server message. */
 internal fun messageIdentity(messageObject: Any): String? =
     try {
-        val dialogId = messageObject.javaClass.getMethod("getDialogId").invoke(messageObject) as Long
-        val id = messageObject.javaClass.getMethod("getId").invoke(messageObject) as Int
+        val dialogId = TelegramObfuscationResolver.getMessageDialogId(messageObject)
+        val id = TelegramObfuscationResolver.getMessageId(messageObject)
         "$dialogId:$id"
     } catch (_: Throwable) {
         null
@@ -95,7 +95,7 @@ internal fun isMessageNoForwardsForPlusOne(messageObject: Any): Boolean {
         return true
     }
     return try {
-        val messageOwner = findField(messageObject.javaClass, "messageOwner").get(messageObject) ?: return false
+        val messageOwner = TelegramObfuscationResolver.getMessageOwner(messageObject) ?: return false
         readBooleanField(messageOwner, "noforwards")
     } catch (_: Throwable) {
         false
@@ -144,7 +144,13 @@ internal fun invokeProcessForwardFromMyName(
                 sendMessagesHelper.javaClass,
                 "processForwardFromMyName",
                 5,
-            ) ?: return false
+            ) ?: sendMessagesHelper.javaClass.declaredMethods.firstOrNull { m ->
+                m.parameterCount == 5 &&
+                    m.parameterTypes[0].isAssignableFrom(messageObject.javaClass) &&
+                    m.parameterTypes[1] == java.lang.Long.TYPE &&
+                    m.parameterTypes[2] == java.lang.Long.TYPE &&
+                    m.parameterTypes[3] == java.lang.Long.TYPE
+            } ?: return false
         val monoForumPeer =
             TelegramObfuscationResolver
                 .resolveChatSendMonoForumPeerIdMethodOrNull(chatActivity.javaClass)
@@ -166,7 +172,7 @@ internal fun invokeProcessForwardFromMyName(
                 suggestionField.get(chatActivity)
             }
 
-        val replyField = findField(messageObject.javaClass, "replyMessageObject")
+        val replyField = TelegramObfuscationResolver.findReplyMessageObjectField(messageObject.javaClass)
         val previousReply = replyField.get(messageObject)
         try {
             // processForwardFromMyName copies this field into the outgoing message. A regular tap

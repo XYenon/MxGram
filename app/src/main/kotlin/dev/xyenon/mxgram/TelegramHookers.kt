@@ -58,7 +58,7 @@ class ReplyLayoutHooker : XposedInterface.Hooker {
     override fun intercept(chain: XposedInterface.Chain): Any? {
         val messageObject = chain.args.firstOrNull() ?: return chain.proceed()
         val field =
-            replyMessageObjectField ?: findField(messageObject.javaClass, "replyMessageObject").also {
+            replyMessageObjectField ?: TelegramObfuscationResolver.findReplyMessageObjectField(messageObject.javaClass).also {
                 replyMessageObjectField = it
             }
         val target = field.get(messageObject) ?: return chain.proceed()
@@ -293,7 +293,7 @@ class ClearMessageNoForwardsHooker : XposedInterface.Hooker {
         val messageObject = chain.thisObject ?: return result
         try {
             val ownerField =
-                messageOwnerField ?: findField(messageObject.javaClass, "messageOwner").also {
+                messageOwnerField ?: TelegramObfuscationResolver.findMessageOwnerField(messageObject.javaClass).also {
                     messageOwnerField = it
                 }
             val messageOwner = ownerField.get(messageObject) ?: return result
