@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Idempotent orb bootstrap for MxGram: Determinate Nix + flake dev shell.
+# Idempotent orb bootstrap for MxGram using the image's Nix + flake dev shell.
 # Amp runs this from the repository root on a fresh or stale project snapshot.
+
+if [[ "$(uname -r)" == *gvisor* ]]; then
+  nix_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nix"
+  mkdir -p "$nix_config_dir"
+  if ! grep -Fqx 'sandbox = false' "$nix_config_dir/nix.conf" 2>/dev/null; then
+    printf '\nsandbox = false\n' >>"$nix_config_dir/nix.conf"
+  fi
+fi
 
 step() {
   local name="$1"
@@ -15,69 +23,14 @@ step() {
   echo "==> ${name} done in $((end - start))s"
 }
 
-have_cmd() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-source_nix() {
-  # The installer cannot update this running script's environment.
-  # shellcheck disable=SC1091
-  if [[ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]]; then
-    # shellcheck disable=SC1091
-    source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
-  elif [[ -f "${HOME}/.nix-profile/etc/profile.d/nix.sh" ]]; then
-    # shellcheck disable=SC1091
-    source "${HOME}/.nix-profile/etc/profile.d/nix.sh"
-  fi
-}
-
 nix_bin() {
-  if [[ -x /nix/var/nix/profiles/default/bin/nix ]]; then
-    printf '%s\n' /nix/var/nix/profiles/default/bin/nix
-  elif [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
+  if [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
     printf '%s\n' "${HOME}/.nix-profile/bin/nix"
-  elif have_cmd nix; then
+  elif command -v nix >/dev/null 2>&1; then
     command -v nix
   else
+    echo "Nix is unavailable in the orb image" >&2
     return 1
-  fi
-}
-
-ensure_apt_packages() {
-  local -a needed=()
-  local pkg
-  for pkg in curl ca-certificates xz-utils sudo; do
-    if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
-      needed+=("${pkg}")
-    fi
-  done
-  if ((${#needed[@]} == 0)); then
-    echo "apt packages already present"
-    return 0
-  fi
-  sudo apt-get update
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${needed[@]}"
-}
-
-install_nix() {
-  if nix_bin >/dev/null; then
-    echo "Nix already installed: $(nix_bin)"
-    return 0
-  fi
-
-  curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
-    sh -s -- install linux --no-confirm
-}
-
-ensure_nix_daemon() {
-  if ! have_cmd systemctl; then
-    return 0
-  fi
-  if systemctl list-unit-files nix-daemon.service >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet nix-daemon.service &&
-      ! systemctl is-active --quiet nix-daemon.socket; then
-      sudo systemctl start nix-daemon.socket nix-daemon.service
-    fi
   fi
 }
 
@@ -95,10 +48,6 @@ ensure_login_shell_hook() {
     cat <<EOF
 ${begin_marker}
 if [[ -z "\${IN_NIX_SHELL:-}" && "\${PWD}" == "${repo_root}" ]]; then
-  if [[ -f /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]]; then
-    # shellcheck disable=SC1091
-    source /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
-  fi
   eval "\$("${nix_path}" print-dev-env "${repo_root}")"
   # print-dev-env replaces PATH; keep the Nix client available.
   case ":\${PATH}:" in
@@ -144,11 +93,6 @@ EOF
   printf '\n%s\n' "${hook}" >>"${tmp}"
   mv "${tmp}" "${profile_file}"
   echo "refreshed login-shell hook in ${profile_file}"
-}
-
-ensure_nix_on_path() {
-  mkdir -p "${HOME}/.local/bin"
-  ln -sfn "$(nix_bin)" "${HOME}/.local/bin/nix"
 }
 
 write_orb_guidance() {
@@ -215,11 +159,7 @@ ensure_telegram_source() {
   echo "Telegram source already available at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
 }
 
-step "Check apt packages" ensure_apt_packages
-step "Install Determinate Nix" install_nix
-source_nix
-step "Ensure nix-daemon" ensure_nix_daemon
-step "Expose Nix CLI" ensure_nix_on_path
+step "Check built-in Nix" "$(nix_bin)" store info
 step "Add login-shell Nix hook" ensure_login_shell_hook
 step "Write orb agent guidance" write_orb_guidance
 step "Ensure Telegram source" ensure_telegram_source
