@@ -23,22 +23,10 @@ step() {
   echo "==> ${name} done in $((end - start))s"
 }
 
-nix_bin() {
-  if [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
-    printf '%s\n' "${HOME}/.nix-profile/bin/nix"
-  elif command -v nix >/dev/null 2>&1; then
-    command -v nix
-  else
-    echo "Nix is unavailable in the orb image" >&2
-    return 1
-  fi
-}
-
 ensure_login_shell_hook() {
-  local repo_root profile_file nix_path begin_marker end_marker hook last_nonblank tmp
+  local repo_root profile_file begin_marker end_marker hook last_nonblank tmp
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   profile_file="${HOME}/.bash_profile"
-  nix_path="$(nix_bin)"
   begin_marker="# mxgram Nix development shell"
   end_marker="# end mxgram Nix development shell"
 
@@ -48,12 +36,7 @@ ensure_login_shell_hook() {
     cat <<EOF
 ${begin_marker}
 if [[ -z "\${IN_NIX_SHELL:-}" && "\${PWD}" == "${repo_root}" ]]; then
-  eval "\$("${nix_path}" print-dev-env "${repo_root}")"
-  # print-dev-env replaces PATH; keep the Nix client available.
-  case ":\${PATH}:" in
-    *:$(printf '%q' "$(dirname "${nix_path}")"):*) ;;
-    *) export PATH="$(dirname "${nix_path}"):\${PATH}" ;;
-  esac
+  eval "\$(nix print-dev-env "${repo_root}")"
 fi
 ${end_marker}
 EOF
@@ -124,13 +107,13 @@ EOF
 realize_dev_shell() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  "$(nix_bin)" develop "${repo_root}" --command true
+  nix develop "${repo_root}" --command true
 }
 
 warm_gradle_project() {
   local repo_root
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  "$(nix_bin)" develop "${repo_root}" --command ./gradlew testDebugUnitTest assembleDebug
+  nix develop "${repo_root}" --command ./gradlew testDebugUnitTest assembleDebug
 }
 
 ensure_telegram_source() {
@@ -159,7 +142,6 @@ ensure_telegram_source() {
   echo "Telegram source already available at ${checkout} ($(git -C "${checkout}" rev-parse --short HEAD))"
 }
 
-step "Check built-in Nix" "$(nix_bin)" store info
 step "Add login-shell Nix hook" ensure_login_shell_hook
 step "Write orb agent guidance" write_orb_guidance
 step "Ensure Telegram source" ensure_telegram_source
@@ -167,4 +149,3 @@ step "Realize Nix development shell" realize_dev_shell
 step "Warm Gradle project" warm_gradle_project
 
 echo "MxGram orb setup complete"
-echo "nix=$(nix_bin) ($(nix --version 2>/dev/null || "$(nix_bin)" --version))"

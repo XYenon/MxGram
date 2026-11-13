@@ -4,11 +4,6 @@ set -euo pipefail
 # Fast, idempotent reconnect for an existing MxGram orb.
 # Amp waits at most 10 seconds; do not install packages here.
 
-if [[ -x "${HOME}/.nix-profile/bin/nix" ]]; then
-  export PATH="${HOME}/.nix-profile/bin:${PATH}"
-fi
-nix store info >/dev/null
-
 # Amp may append its environment loader after setup. Keep the repository-scoped Nix hook last so
 # PATH values loaded by Amp cannot replace the development shell's toolchain paths.
 profile_file="${HOME}/.bash_profile"
